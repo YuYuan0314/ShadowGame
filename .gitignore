@@ -24,5 +24,8 @@ Thumbs.db
 # Asset meta files should be tracked
 !.gitkeep
 
+# Asset packages (not needed at runtime)
+*.unitypackage
+
 # Crashlytics
 crashlytics-build.properties
