@@ -1,0 +1,28 @@
+# Unity generated
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+MemoryCaptures/
+
+# IDE / OS
+.idea/
+.vs/
+.vscode/
+*.csproj
+*.sln
+*.user
+*.userosscache
+*.suo
+*.userprefs
+.DS_Store
+Thumbs.db
+
+# Asset meta files should be tracked
+!.gitkeep
+
+# Crashlytics
+crashlytics-build.properties
