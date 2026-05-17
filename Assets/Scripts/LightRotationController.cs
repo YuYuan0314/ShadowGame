@@ -3,51 +3,57 @@ using System.Collections;
 
 public class LightRotationController : MonoBehaviour
 {
-    [Header("引用设置")]
-    public Light directionalLight;      // 拖入场景中的直射光
-    public float rotationDuration = 0.5f; // 旋转动画持续时间
+    [Header("Light Reference")]
+    public Light directionalLight;
 
-    [Header("交互设置")]
+    [Header("Keyboard Snap Rotation")]
+    public KeyCode rotateLeftKey = KeyCode.G;
+    public KeyCode rotateRightKey = KeyCode.H;
+    public float snapAngle = 45f;
+    public float snapDuration = 0.5f;
+
+    [Header("Gamepad Trigger Rotation")]
+    public float triggerRotateSpeed = 60f;
+
+    [Header("Interaction")]
     public float interactionRange = 3f;
-    private bool playerInRange = false;
-    private bool isRotating = false; // 防止旋转动画重叠
+
+    private bool playerInRange;
+    private bool isRotating;
 
     void Update()
     {
-        if (playerInRange && !isRotating)
-        {
-            // 按 F 逆时针旋转 45 度 (XZ平面)
-            if (Input.GetKeyDown(KeyCode.G))
-            {
-                StartCoroutine(RotateLight(45f));
-            }
-            // 按 G 顺时针旋转 45 度 (XZ平面)
-            else if (Input.GetKeyDown(KeyCode.H))
-            {
-                StartCoroutine(RotateLight(-45f));
-            }
-        }
+        if (!playerInRange || isRotating) return;
+
+        // Keyboard snap rotation (G/H)
+        if (Input.GetKeyDown(rotateLeftKey))
+            StartCoroutine(SnapRotate(snapAngle));
+        else if (Input.GetKeyDown(rotateRightKey))
+            StartCoroutine(SnapRotate(-snapAngle));
+
+        // Gamepad trigger continuous rotation (LT/RT)
+        float lt = Input.GetAxis("LightRotateL");
+        float rt = Input.GetAxis("LightRotateR");
+
+        if (lt > 0.1f)
+            directionalLight.transform.rotation *= Quaternion.Euler(0, -triggerRotateSpeed * Time.deltaTime * lt, 0);
+
+        if (rt > 0.1f)
+            directionalLight.transform.rotation *= Quaternion.Euler(0, triggerRotateSpeed * Time.deltaTime * rt, 0);
     }
 
-    /// <summary>
-    /// 平滑旋转灯光
-    /// </summary>
-    /// <param name="angleY">旋转的角度（Y轴偏移）</param>
-    IEnumerator RotateLight(float angleY)
+    IEnumerator SnapRotate(float angleY)
     {
         isRotating = true;
 
         Quaternion startRotation = directionalLight.transform.rotation;
-        // 在当前旋转的基础上，绕世界坐标的 Y 轴进行旋转
         Quaternion endRotation = Quaternion.Euler(0, angleY, 0) * startRotation;
 
         float elapsed = 0;
-        while (elapsed < rotationDuration)
+        while (elapsed < snapDuration)
         {
             elapsed += Time.deltaTime;
-            float t = elapsed / rotationDuration;
-
-            // 使用平滑插值，让旋转看起来更自然
+            float t = elapsed / snapDuration;
             directionalLight.transform.rotation = Quaternion.Slerp(startRotation, endRotation, t);
             yield return null;
         }
@@ -56,7 +62,6 @@ public class LightRotationController : MonoBehaviour
         isRotating = false;
     }
 
-    // --- 玩家范围检测 ---
     private void OnTriggerEnter(Collider other)
     {
         if (other.CompareTag("Player")) playerInRange = true;

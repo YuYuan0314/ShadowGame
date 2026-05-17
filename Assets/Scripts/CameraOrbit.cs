@@ -33,8 +33,8 @@ public class CameraOrbit : MonoBehaviour
 
     void Update()
     {
-        if (Input.GetKeyDown(KeyCode.O)) targetYRotation -= 90f;
-        if (Input.GetKeyDown(KeyCode.P)) targetYRotation += 90f;
+        if (Input.GetKeyDown(KeyCode.O) || Input.GetKeyDown(KeyCode.JoystickButton4)) targetYRotation -= 90f;
+        if (Input.GetKeyDown(KeyCode.P) || Input.GetKeyDown(KeyCode.JoystickButton5)) targetYRotation += 90f;
 
         Quaternion targetRot = Quaternion.Euler(0, targetYRotation, 0);
         transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, Time.deltaTime * rotateSpeed);

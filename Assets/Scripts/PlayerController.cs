@@ -34,6 +34,9 @@ public class PlayerRbController : MonoBehaviour
     [Header("当前状态")]
     public float currentLightTimer = 0f;
 
+    [Header("手柄震动")]
+    public float rumbleIntensity = 0.5f;
+
     private Rigidbody rb;
     private Transform camTransform;
     private CameraOrbit cameraOrbit;
@@ -110,6 +113,9 @@ public class PlayerRbController : MonoBehaviour
                 if (cameraOrbit != null)
                     chargeShakeTween = DOTween.To(() => 0f, _ => { }, 1f, 99f)
                         .SetTarget(cameraOrbit);
+
+                // 手柄震动开始
+                GamepadRumble.SetVibration(0.1f, 0.05f);
             }
 
             if (Input.GetButton("Jump") && isChargingJump)
@@ -131,6 +137,11 @@ public class PlayerRbController : MonoBehaviour
                     float sy = (Mathf.PerlinNoise(Time.time * 35f, 0) - 0.5f) * 2f * s;
                     cameraOrbit.shakeOffset = new Vector3(sx, sy, 0);
                 }
+
+                // 手柄震动随蓄力增强
+                GamepadRumble.SetVibration(
+                    Mathf.Lerp(0.1f, rumbleIntensity, chargePercent),
+                    Mathf.Lerp(0.05f, rumbleIntensity * 0.5f, chargePercent));
             }
 
             if (Input.GetButtonUp("Jump") && isChargingJump)
@@ -431,6 +442,9 @@ public class PlayerRbController : MonoBehaviour
         if (cameraOrbit != null)
             cameraOrbit.shakeOffset = Vector3.zero;
 
+        // 停止手柄震动
+        GamepadRumble.Stop();
+
         // 缩放弹回原状（带弹性）
         chargeScaleTween = transform.DOScale(originalScale, 0.25f).SetEase(Ease.OutBack);
     }
@@ -440,5 +454,6 @@ public class PlayerRbController : MonoBehaviour
         DOTween.Kill(transform);
         if (cameraOrbit != null)
             cameraOrbit.shakeOffset = Vector3.zero;
+        GamepadRumble.Stop();
     }
 }
