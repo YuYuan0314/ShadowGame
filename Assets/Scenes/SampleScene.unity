@@ -157,7 +157,7 @@ MonoBehaviour:
   - {fileID: 1463716423}
   - {fileID: 1445079559}
   pathType: 1
-  travelDuration: 3
+  travelDuration: 8
   travelEase: 10
   lookMode: 1
   lookAhead: 0.08
@@ -7702,13 +7702,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1463716422}
   serializedVersion: 2
-  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: -9.71, y: 0, z: 0}
+  m_LocalRotation: {x: -0, y: -0.40153602, z: -0, w: 0.91584325}
+  m_LocalPosition: {x: -9.71, y: 0.88, z: 1.44}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 383876328}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: -47.348, z: 0}
 --- !u!1 &1529798053 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 919132149155446097, guid: 25f48140de294e54884fd5f547f25871,
@@ -8689,6 +8689,11 @@ MonoBehaviour:
   lineColor: {r: 1, g: 0.95, b: 0.5, a: 0.7}
   startWidth: 0.06
   endWidth: 0.08
+  dotDensity: 50
+  ringRadius: 0.35
+  ringWidth: 0.08
+  ringColor: {r: 1, g: 0.95, b: 0.5, a: 0.9}
+  ringSegments: 40
 --- !u!120 &2002530523
 LineRenderer:
   serializedVersion: 2
