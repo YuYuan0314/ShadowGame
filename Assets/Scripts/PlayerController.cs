@@ -63,6 +63,13 @@ public class PlayerRbController : MonoBehaviour
     // 蓄力跳跃
     private bool isChargingJump;
     private float jumpChargeStartTime;
+
+    // 公开只读状态 (供 JumpTrajectoryPreview 等组件读取)
+    public bool IsChargingJump => isChargingJump;
+    public float ChargePercent => isChargingJump
+        ? Mathf.Clamp01((Time.time - jumpChargeStartTime) / chargeTimeToMax)
+        : 0f;
+    public Vector3 PlatformVelocity => lastPlatformVelocity;
     private Vector3 originalScale;
     private Tween chargeShakeTween;
     private Tween chargeScaleTween;
