@@ -16,6 +16,16 @@ public class PlayerRbController : MonoBehaviour
     public float maxJumpForce = 20f;
     public float chargeTimeToMax = 1.5f;
 
+    [Header("Jump Drive")]
+    [Tooltip("How long the scripted upward jump force is applied after releasing Jump.")]
+    public float jumpForceDuration = 0.14f;
+    [Tooltip("Shape of the scripted jump force. The total applied velocity is normalized to the charge amount.")]
+    public AnimationCurve jumpForceCurve = AnimationCurve.EaseInOut(0f, 1f, 1f, 0f);
+
+    [Header("Fall Tuning")]
+    [Tooltip("Extra gravity multiplier applied only while falling after the scripted jump force is done.")]
+    public float fallGravityMultiplier = 2.5f;
+
     [Header("蓄力特效")]
     public float squishAmount = 0.4f;
     public float stretchAmount = 0.15f;
@@ -63,6 +73,11 @@ public class PlayerRbController : MonoBehaviour
     // 蓄力跳跃
     private bool isChargingJump;
     private float jumpChargeStartTime;
+    private bool isApplyingJumpForce;
+    private float jumpForceElapsed;
+    private float jumpForceTotalVelocity;
+    private float jumpForceRemainingVelocity;
+    private float jumpForceCurveArea;
 
     // 公开只读状态 (供 JumpTrajectoryPreview 等组件读取)
     public bool IsChargingJump => isChargingJump;
@@ -102,7 +117,7 @@ public class PlayerRbController : MonoBehaviour
         rb.drag = isGrounded ? groundDrag : airDrag;
 
         // 真正落地时才清除跳跃标记（Y 速度已稳定）
-        if (isGrounded && Mathf.Abs(rb.velocity.y) < 0.5f)
+        if (isGrounded && !isApplyingJumpForce && Mathf.Abs(rb.velocity.y) < 0.5f)
             jumpedThisFlight = false;
 
         UpdateShadowLogic();
@@ -156,8 +171,7 @@ public class PlayerRbController : MonoBehaviour
                 float chargePercent = Mathf.Clamp01((Time.time - jumpChargeStartTime) / chargeTimeToMax);
                 float launchForce = Mathf.Lerp(minJumpForce, maxJumpForce, chargePercent);
 
-                rb.velocity = new Vector3(lastPlatformVelocity.x, 0, lastPlatformVelocity.z);
-                rb.AddForce(Vector3.up * launchForce, ForceMode.Impulse);
+                StartScriptedJumpForce(launchForce);
                 jumpedThisFlight = true;
                 isChargingJump = false;
 
@@ -187,19 +201,20 @@ public class PlayerRbController : MonoBehaviour
         }
 
         Vector3 checkPoint = transform.position + Vector3.up * 0.05f;
-        GameObject source = shadowManager.GetShadowSource(checkPoint);
+        GameObject source = shadowManager.GetProjectedShadowSource(checkPoint);
         exposedBySpotlight = SpotlightExposureZone.IsAnyPointExposed(checkPoint);
+        bool isInProjectedArea = source != null;
 
         // spotlight 照射区域覆盖阴影判定，强制视为非阴影
-        bool isInShadowNow = (source != null) && !exposedBySpotlight;
+        bool isInShadowNow = isInProjectedArea && !exposedBySpotlight;
 
         bool isInEdgeZone = false;
-        if (!isInShadowNow && !exposedBySpotlight)
+        if (!isInProjectedArea && !exposedBySpotlight)
             isInEdgeZone = shadowManager.IsNearProjectedArea(checkPoint, shadowEdgeTolerance);
 
-        bool isSafe = (isInShadowNow || isInEdgeZone) && !exposedBySpotlight;
+        bool isSafeForMomentum = (isInShadowNow || isInEdgeZone) && !exposedBySpotlight;
 
-        if (wasInShadowLastFrame && !isSafe)
+        if (wasInShadowLastFrame && !isSafeForMomentum)
         {
             if (!jumpedThisFlight)
             {
@@ -213,7 +228,7 @@ public class PlayerRbController : MonoBehaviour
             outOfShadowFrames = 0;
         }
 
-        if (isSafe)
+        if (isInShadowNow)
         {
             currentLightTimer = 0f;
 
@@ -247,7 +262,7 @@ public class PlayerRbController : MonoBehaviour
                 ExecuteShadowReset();
         }
 
-        wasInShadowLastFrame = isSafe;
+        wasInShadowLastFrame = isSafeForMomentum;
     }
 
     private void StripPlatformMomentum()
@@ -261,6 +276,8 @@ public class PlayerRbController : MonoBehaviour
         if (isResetting) return;
         isResetting = true;
 
+        isApplyingJumpForce = false;
+        jumpForceRemainingVelocity = 0f;
         rb.velocity = Vector3.zero;
         currentLightTimer = 0f;
 
@@ -313,7 +330,7 @@ public class PlayerRbController : MonoBehaviour
 
         // 先检测当前实际所在的 shadow source，判断回弹到的是 fallback 还是原平台
         Vector3 checkPoint = transform.position + Vector3.up * 0.05f;
-        GameObject actualSource = shadowManager.GetShadowSource(checkPoint);
+        GameObject actualSource = shadowManager.GetProjectedShadowSource(checkPoint);
         bool switchedSource = actualSource != null && actualSource != lastActiveShadowSource;
 
         if (switchedSource)
@@ -348,16 +365,72 @@ public class PlayerRbController : MonoBehaviour
     {
         if (isResetting) return;
         HandleMovement();
-        ApplyExtraGravity();
+        ApplyScriptedJumpForce();
+        ApplyFallGravity();
     }
 
-    private void ApplyExtraGravity()
+    private void StartScriptedJumpForce(float totalVelocity)
     {
-        if (!isGrounded && gravityMultiplier > 1f)
+        float duration = Mathf.Max(0.01f, jumpForceDuration);
+
+        rb.velocity = new Vector3(lastPlatformVelocity.x, 0f, lastPlatformVelocity.z);
+
+        isApplyingJumpForce = true;
+        jumpForceElapsed = 0f;
+        jumpForceTotalVelocity = Mathf.Max(0f, totalVelocity);
+        jumpForceRemainingVelocity = jumpForceTotalVelocity;
+        jumpForceCurveArea = EstimateJumpForceCurveArea();
+    }
+
+    private void ApplyScriptedJumpForce()
+    {
+        if (!isApplyingJumpForce)
+            return;
+
+        float duration = Mathf.Max(0.01f, jumpForceDuration);
+        float t = Mathf.Clamp01(jumpForceElapsed / duration);
+        float curveValue = jumpForceCurve != null ? Mathf.Max(0f, jumpForceCurve.Evaluate(t)) : 1f;
+        float normalizedCurveArea = Mathf.Max(0.01f, jumpForceCurveArea);
+        float velocityThisStep = jumpForceTotalVelocity * curveValue * Time.fixedDeltaTime / (duration * normalizedCurveArea);
+        velocityThisStep = Mathf.Min(velocityThisStep, jumpForceRemainingVelocity);
+
+        if (velocityThisStep > 0f)
+            rb.AddForce(Vector3.up * velocityThisStep, ForceMode.VelocityChange);
+
+        jumpForceRemainingVelocity -= velocityThisStep;
+        jumpForceElapsed += Time.fixedDeltaTime;
+
+        if (jumpForceElapsed >= duration || jumpForceRemainingVelocity <= 0.001f)
         {
-            float extra = Physics.gravity.y * (gravityMultiplier - 1f);
-            rb.AddForce(new Vector3(0, extra, 0), ForceMode.Acceleration);
+            isApplyingJumpForce = false;
         }
+    }
+
+    private float EstimateJumpForceCurveArea()
+    {
+        if (jumpForceCurve == null)
+            return 1f;
+
+        const int samples = 12;
+        float area = 0f;
+        float previous = Mathf.Max(0f, jumpForceCurve.Evaluate(0f));
+        for (int i = 1; i <= samples; i++)
+        {
+            float t = i / (float)samples;
+            float current = Mathf.Max(0f, jumpForceCurve.Evaluate(t));
+            area += (previous + current) * 0.5f / samples;
+            previous = current;
+        }
+
+        return Mathf.Max(0.01f, area);
+    }
+
+    private void ApplyFallGravity()
+    {
+        if (isGrounded || isApplyingJumpForce || rb.velocity.y >= 0f || fallGravityMultiplier <= 1f)
+            return;
+
+        rb.AddForce(Physics.gravity * (fallGravityMultiplier - 1f), ForceMode.Acceleration);
     }
 
     private void HandleMovement()
@@ -431,10 +504,13 @@ public class PlayerRbController : MonoBehaviour
         Vector3 horizVel = new Vector3(rb.velocity.x, 0, rb.velocity.z);
         float limit = isGrounded ? moveSpeed * 1.5f : moveSpeed * 1.2f;
 
-        if (horizVel.magnitude > limit)
+        Vector3 platformHorizVel = new Vector3(platformVelocity.x, 0f, platformVelocity.z);
+        Vector3 relativeHorizVel = isGrounded ? horizVel - platformHorizVel : horizVel;
+        if (relativeHorizVel.magnitude > limit)
         {
-            horizVel = horizVel.normalized * limit;
-            rb.velocity = new Vector3(horizVel.x, rb.velocity.y, horizVel.z);
+            relativeHorizVel = relativeHorizVel.normalized * limit;
+            Vector3 finalHorizVel = isGrounded ? platformHorizVel + relativeHorizVel : relativeHorizVel;
+            rb.velocity = new Vector3(finalHorizVel.x, rb.velocity.y, finalHorizVel.z);
         }
     }
 

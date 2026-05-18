@@ -4,38 +4,44 @@ using DG.Tweening;
 [RequireComponent(typeof(Collider))]
 public class CinematicCameraPath : MonoBehaviour
 {
-    public enum LookMode { None, AlongPath, Target }
+    public enum LookMode { None, AlongPath, Target, WaypointTargets }
 
-    [Header("路径点")]
-    [Tooltip("镜头依次经过的点位（终点为最后一个）")]
+    [Header("Path Points")]
+    [Tooltip("Camera positions in order. The last item is the final cinematic point.")]
     public Transform[] waypoints;
 
-    [Header("路径设置")]
+    [Header("Path Settings")]
     public PathType pathType = PathType.CatmullRom;
-    [Tooltip("沿路径移动的总时长（秒）")]
+    [Tooltip("Total travel time along the path, in seconds.")]
     public float travelDuration = 3f;
     public Ease travelEase = Ease.InOutCubic;
 
-    [Header("注视")]
+    [Header("Look")]
     public LookMode lookMode = LookMode.AlongPath;
-    [Tooltip("注视路径前方的预判量（仅 AlongPath 模式）")]
+    [Tooltip("Look-ahead amount for AlongPath mode.")]
     public float lookAhead = 0.08f;
-    [Tooltip("注视目标（仅 Target 模式）")]
+    [Tooltip("Single look target for Target mode.")]
     public Transform lookAtTarget;
+    [Tooltip("WaypointTargets mode: each camera waypoint looks at the matching Transform position.")]
+    public Transform[] lookAtPoints;
+    [Tooltip("0 snaps to each computed look direction. 1 follows it directly. Values between 0 and 1 ease toward it.")]
+    [Range(0f, 1f)]
+    public float lookSmoothness = 1f;
 
-    [Header("收尾")]
-    [Tooltip("终点停留时长（秒）")]
+    [Header("Finish")]
+    [Tooltip("How long to hold on the final point, in seconds.")]
     public float holdDuration = 1f;
-    [Tooltip("回到玩家视角的时长（秒）")]
+    [Tooltip("How long to return to the player camera, in seconds.")]
     public float returnDuration = 1f;
     public Ease returnEase = Ease.InOutCubic;
 
-    [Header("触发")]
-    [Tooltip("只触发一次")]
+    [Header("Trigger")]
+    [Tooltip("Only trigger this cinematic once.")]
     public bool triggerOnce = true;
 
     private bool triggered;
     private Sequence sequence;
+    private Tween activePathTween;
     private CameraOrbit cameraOrbit;
     private PlayerRbController playerController;
     private Rigidbody playerRb;
@@ -70,35 +76,28 @@ public class CinematicCameraPath : MonoBehaviour
         camTransform = Camera.main.transform;
         cameraOrbit = camTransform.GetComponentInParent<CameraOrbit>();
 
-        // 保存相机原始状态
         camOriginalWorldPos = camTransform.position;
         camOriginalWorldRot = camTransform.rotation;
         camOriginalLocalPos = camTransform.localPosition;
         camOriginalLocalRot = camTransform.localRotation;
 
-        // === 接管控制 ===
-        // 禁用玩家：先清零速度再切 kinematic（顺序不能换，kinematic 不能设 velocity）
         playerRb.velocity = Vector3.zero;
         playerRb.isKinematic = true;
         playerController.enabled = false;
 
-        // 禁用相机轨道（保留相机 GameObject 激活，只禁用脚本）
         if (cameraOrbit != null)
             cameraOrbit.enabled = false;
 
-        // === 构建路径动画 ===
         sequence = DOTween.Sequence();
 
-        // 路径点数组（从相机当前位置出发，经过所有 waypoint）
         Vector3[] pathPoints = new Vector3[waypoints.Length];
         for (int i = 0; i < waypoints.Length; i++)
             pathPoints[i] = waypoints[i].position;
 
-        // 沿路径移动
         var pathTween = camTransform.DOPath(pathPoints, travelDuration, pathType)
             .SetEase(travelEase);
+        activePathTween = pathTween;
 
-        // 注视模式
         switch (lookMode)
         {
             case LookMode.AlongPath:
@@ -108,36 +107,76 @@ public class CinematicCameraPath : MonoBehaviour
                 if (lookAtTarget != null)
                     pathTween.SetLookAt(lookAtTarget);
                 break;
+            case LookMode.WaypointTargets:
+                pathTween.OnUpdate(UpdateWaypointTargetLook);
+                UpdateWaypointTargetLook();
+                break;
         }
 
         sequence.Append(pathTween);
-
-        // 终点停留
         sequence.AppendInterval(holdDuration);
-
-        // 返回原始位置和朝向
         sequence.Append(camTransform.DOMove(camOriginalWorldPos, returnDuration).SetEase(returnEase));
         sequence.Join(camTransform.DORotateQuaternion(camOriginalWorldRot, returnDuration).SetEase(returnEase));
-
-        // === 收尾 ===
         sequence.OnComplete(RestoreControl);
+    }
+
+    void UpdateWaypointTargetLook()
+    {
+        if (camTransform == null || waypoints == null || waypoints.Length == 0 || lookAtPoints == null || lookAtPoints.Length == 0)
+            return;
+
+        Vector3 lookPosition = GetInterpolatedLookPosition(activePathTween != null ? activePathTween.ElapsedPercentage(false) : 0f);
+        Vector3 lookDirection = lookPosition - camTransform.position;
+        if (lookDirection.sqrMagnitude < 0.0001f)
+            return;
+
+        Quaternion targetRotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
+        camTransform.rotation = lookSmoothness <= 0f
+            ? targetRotation
+            : Quaternion.Slerp(camTransform.rotation, targetRotation, lookSmoothness);
+    }
+
+    Vector3 GetInterpolatedLookPosition(float normalizedTime)
+    {
+        int pointCount = Mathf.Min(waypoints.Length, lookAtPoints.Length);
+        if (pointCount <= 0)
+            return camTransform.position + camTransform.forward;
+
+        if (pointCount == 1)
+            return ResolveLookPosition(0);
+
+        float scaledTime = Mathf.Clamp01(normalizedTime) * (pointCount - 1);
+        int fromIndex = Mathf.Clamp(Mathf.FloorToInt(scaledTime), 0, pointCount - 1);
+        int toIndex = Mathf.Clamp(fromIndex + 1, 0, pointCount - 1);
+        float segmentT = scaledTime - fromIndex;
+
+        return Vector3.Lerp(ResolveLookPosition(fromIndex), ResolveLookPosition(toIndex), segmentT);
+    }
+
+    Vector3 ResolveLookPosition(int index)
+    {
+        if (lookAtPoints != null && index >= 0 && index < lookAtPoints.Length && lookAtPoints[index] != null)
+            return lookAtPoints[index].position;
+
+        if (waypoints != null && index >= 0 && index < waypoints.Length && waypoints[index] != null)
+            return waypoints[index].position + waypoints[index].forward;
+
+        return camTransform.position + camTransform.forward;
     }
 
     void RestoreControl()
     {
-        // 恢复相机本地坐标（确保和 CameraOrbit 一致）
         camTransform.localPosition = camOriginalLocalPos;
         camTransform.localRotation = camOriginalLocalRot;
 
-        // 恢复相机轨道
         if (cameraOrbit != null)
             cameraOrbit.enabled = true;
 
-        // 恢复玩家
         playerRb.isKinematic = false;
         playerRb.velocity = Vector3.zero;
         playerController.enabled = true;
 
+        activePathTween = null;
         sequence = null;
     }
 
@@ -151,7 +190,6 @@ public class CinematicCameraPath : MonoBehaviour
     {
         if (waypoints == null || waypoints.Length == 0) return;
 
-        // 路径线
         Gizmos.color = Color.cyan;
         Vector3 prev = waypoints[0] != null ? waypoints[0].position : transform.position;
         for (int i = 0; i < waypoints.Length; i++)
@@ -162,7 +200,6 @@ public class CinematicCameraPath : MonoBehaviour
             prev = p;
         }
 
-        // 路径点球
         Gizmos.color = Color.yellow;
         for (int i = 0; i < waypoints.Length; i++)
         {
@@ -171,19 +208,29 @@ public class CinematicCameraPath : MonoBehaviour
             Gizmos.DrawSphere(waypoints[i].position, radius);
         }
 
-        // 编号标签（Scene 视图显示）
+        if (lookAtPoints != null)
+        {
+            Gizmos.color = Color.green;
+            int count = Mathf.Min(waypoints.Length, lookAtPoints.Length);
+            for (int i = 0; i < count; i++)
+            {
+                if (waypoints[i] == null || lookAtPoints[i] == null) continue;
+                Gizmos.DrawLine(waypoints[i].position, lookAtPoints[i].position);
+                Gizmos.DrawWireSphere(lookAtPoints[i].position, 0.12f);
+            }
+        }
+
         Color labelColor = Color.white;
         for (int i = 0; i < waypoints.Length; i++)
         {
             if (waypoints[i] == null) continue;
             UnityEditor.Handles.Label(
                 waypoints[i].position + Vector3.up * 0.3f,
-                i == waypoints.Length - 1 ? $"[{i}] 终点" : $"[{i}]",
+                i == waypoints.Length - 1 ? $"[{i}] End" : $"[{i}]",
                 new GUIStyle { normal = new GUIStyleState { textColor = labelColor } }
             );
         }
 
-        // 触发区域（半透明）
         Gizmos.color = new Color(0f, 1f, 1f, 0.15f);
         var col = GetComponent<Collider>();
         if (col is BoxCollider bc)

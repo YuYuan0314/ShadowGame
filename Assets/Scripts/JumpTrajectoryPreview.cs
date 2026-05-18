@@ -15,6 +15,13 @@ public class JumpTrajectoryPreview : MonoBehaviour
     public float maxHeight = 0f;
     [Tooltip("空中水平速度上限倍率，相对 moveSpeed。默认 1.2 和 PlayerController 一致")]
     public float airSpeedLimitMult = 1.2f;
+    [Header("预览校准")]
+    [Tooltip("只影响预览线的起跳上升速度倍率，不影响真实跳跃。预览太高就调低。")]
+    public float previewJumpVelocityScale = 0.85f;
+    [Tooltip("只影响预览线的空中横向加速倍率，不影响真实移动。预览太远就调低。")]
+    public float previewAirAccelScale = 0.75f;
+    [Tooltip("只影响预览线的空中水平速度上限倍率，不影响真实移动。预览太远就调低。")]
+    public float previewAirSpeedLimitScale = 0.9f;
     [Tooltip("曲线上采样点最大数量")]
     public int maxPoints = 100;
     [Tooltip("采样点最小间距")]
@@ -155,39 +162,56 @@ public class JumpTrajectoryPreview : MonoBehaviour
     Vector3 UpdateTrajectory(Vector3 startPos, Vector3 moveDir, float chargePercent,
         Vector3 platformVel, float step)
     {
-        float launchForce = Mathf.Lerp(player.minJumpForce, player.maxJumpForce, chargePercent);
+        float jumpVelocity = Mathf.Lerp(player.minJumpForce, player.maxJumpForce, chargePercent)
+            * Mathf.Max(0f, previewJumpVelocityScale);
 
         if (maxHeight > 0f)
         {
-            float g = Mathf.Abs(Physics.gravity.y * player.gravityMultiplier);
-            float cappedLaunch = Mathf.Sqrt(2f * g * maxHeight);
-            launchForce = Mathf.Min(launchForce, cappedLaunch);
+            float cappedLaunch = Mathf.Sqrt(2f * Mathf.Abs(Physics.gravity.y) * maxHeight);
+            jumpVelocity = Mathf.Min(jumpVelocity, cappedLaunch);
         }
 
-        float groundY = startPos.y - colliderBottomOffset;
-        if (Physics.Raycast(startPos, Vector3.down, out RaycastHit hit, 5f, groundLayer))
-            groundY = hit.point.y;
-
-        float landingCenterY = groundY + colliderBottomOffset;
-
-        Vector3 vel = new Vector3(platformVel.x, launchForce, platformVel.z);
-        Vector3 gravityAccel = new Vector3(0f, Physics.gravity.y * player.gravityMultiplier, 0f);
-        Vector3 airAccel = moveDir * (player.moveSpeed * 5f);
-        Vector3 totalAccel = gravityAccel + airAccel;
+        Vector3 vel = new Vector3(platformVel.x, 0f, platformVel.z);
+        Vector3 airAccel = moveDir * (player.moveSpeed * 5f * Mathf.Max(0f, previewAirAccelScale));
 
         Vector3 pos = startPos;
         int count = 0;
         float simTime = 0f;
+        bool hasLeftGround = false;
+        float jumpForceElapsed = 0f;
+        float jumpForceRemainingVelocity = jumpVelocity;
+        float jumpForceDuration = Mathf.Max(0.01f, player.jumpForceDuration);
+        float jumpForceCurveArea = EstimateJumpForceCurveArea(player.jumpForceCurve);
         float distSinceLast = 0f;
         Vector3 lastRecorded = pos;
         Vector3 prevPos = pos;
 
         while (count < maxPoints && simTime < maxSimTime)
         {
-            vel += totalAccel * step;
+            prevPos = pos;
+
+            bool applyingJumpForce = jumpForceElapsed < jumpForceDuration && jumpForceRemainingVelocity > 0.001f;
+            if (applyingJumpForce)
+            {
+                float t = Mathf.Clamp01(jumpForceElapsed / jumpForceDuration);
+                float curveValue = player.jumpForceCurve != null ? Mathf.Max(0f, player.jumpForceCurve.Evaluate(t)) : 1f;
+                float velocityThisStep = jumpVelocity * curveValue * step / (jumpForceDuration * jumpForceCurveArea);
+                velocityThisStep = Mathf.Min(velocityThisStep, jumpForceRemainingVelocity);
+
+                vel += Vector3.up * velocityThisStep;
+                jumpForceRemainingVelocity -= velocityThisStep;
+                jumpForceElapsed += step;
+            }
+
+            vel += airAccel * step;
+            vel += Physics.gravity * step;
+
+            applyingJumpForce = jumpForceElapsed < jumpForceDuration && jumpForceRemainingVelocity > 0.001f;
+            if (!applyingJumpForce && vel.y < 0f && player.fallGravityMultiplier > 1f)
+                vel += Physics.gravity * (player.fallGravityMultiplier - 1f) * step;
 
             Vector3 horizVel = new Vector3(vel.x, 0f, vel.z);
-            float airLimit = player.moveSpeed * airSpeedLimitMult;
+            float airLimit = player.moveSpeed * airSpeedLimitMult * Mathf.Max(0f, previewAirSpeedLimitScale);
             if (horizVel.magnitude > airLimit)
             {
                 horizVel = horizVel.normalized * airLimit;
@@ -197,14 +221,12 @@ public class JumpTrajectoryPreview : MonoBehaviour
             pos += vel * step;
             simTime += step;
 
-            if (vel.y < 0f && pos.y <= landingCenterY)
+            if (!hasLeftGround && pos.y > startPos.y + 0.05f)
+                hasLeftGround = true;
+
+            if (hasLeftGround && vel.y < 0f && TryFindLandingPoint(prevPos, pos, out Vector3 landingPoint))
             {
-                float prevY = prevPos.y;
-                float deltaY = pos.y - prevY;
-                float t = deltaY != 0f ? (landingCenterY - prevY) / deltaY : 0f;
-                t = Mathf.Clamp01(t);
-                pos = Vector3.Lerp(prevPos, pos, t);
-                pos.y = landingCenterY;
+                pos = landingPoint;
                 points[count++] = pos;
                 break;
             }
@@ -216,8 +238,6 @@ public class JumpTrajectoryPreview : MonoBehaviour
                 distSinceLast = 0f;
                 lastRecorded = pos;
             }
-
-            prevPos = pos;
         }
 
         lr.positionCount = count;
@@ -226,6 +246,46 @@ public class JumpTrajectoryPreview : MonoBehaviour
 
         // 返回落点（最后记录的点）
         return count > 0 ? points[count - 1] : startPos;
+    }
+
+    bool TryFindLandingPoint(Vector3 previousCenter, Vector3 currentCenter, out Vector3 landingCenter)
+    {
+        landingCenter = currentCenter;
+
+        Vector3 previousBottom = previousCenter + Vector3.down * colliderBottomOffset;
+        Vector3 currentBottom = currentCenter + Vector3.down * colliderBottomOffset;
+        Vector3 sweep = currentBottom - previousBottom;
+        float sweepDistance = sweep.magnitude;
+
+        if (sweepDistance <= 0.0001f)
+            return false;
+
+        if (Physics.Raycast(previousBottom, sweep.normalized, out RaycastHit hit, sweepDistance, groundLayer))
+        {
+            landingCenter = hit.point + Vector3.up * colliderBottomOffset;
+            return true;
+        }
+
+        return false;
+    }
+
+    float EstimateJumpForceCurveArea(AnimationCurve curve)
+    {
+        if (curve == null)
+            return 1f;
+
+        const int samples = 12;
+        float area = 0f;
+        float previous = Mathf.Max(0f, curve.Evaluate(0f));
+        for (int i = 1; i <= samples; i++)
+        {
+            float t = i / (float)samples;
+            float current = Mathf.Max(0f, curve.Evaluate(t));
+            area += (previous + current) * 0.5f / samples;
+            previous = current;
+        }
+
+        return Mathf.Max(0.01f, area);
     }
 
     void UpdateLandingRing(Vector3 center)
