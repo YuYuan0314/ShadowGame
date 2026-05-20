@@ -206,10 +206,10 @@ public class PlayerRbController : MonoBehaviour
         bool isInProjectedArea = source != null;
 
         // spotlight 照射区域覆盖阴影判定，强制视为非阴影
-        bool isInShadowNow = isInProjectedArea && !exposedBySpotlight;
+        bool isInShadowNow = isGrounded && isInProjectedArea && !exposedBySpotlight;
 
         bool isInEdgeZone = false;
-        if (!isInProjectedArea && !exposedBySpotlight)
+        if (isGrounded && !isInProjectedArea && !exposedBySpotlight)
             isInEdgeZone = shadowManager.IsNearProjectedArea(checkPoint, shadowEdgeTolerance);
 
         bool isSafeForMomentum = (isInShadowNow || isInEdgeZone) && !exposedBySpotlight;
@@ -373,7 +373,10 @@ public class PlayerRbController : MonoBehaviour
     {
         float duration = Mathf.Max(0.01f, jumpForceDuration);
 
-        rb.velocity = new Vector3(lastPlatformVelocity.x, 0f, lastPlatformVelocity.z);
+        lastPlatformVelocity = Vector3.zero;
+        if (lastActiveShadowSource != null)
+            lastSourcePos = lastActiveShadowSource.transform.position;
+        rb.velocity = new Vector3(0f, 0f, 0f);
 
         isApplyingJumpForce = true;
         jumpForceElapsed = 0f;
@@ -450,15 +453,30 @@ public class PlayerRbController : MonoBehaviour
 
         // === 平台速度追踪（用速度替代 MovePosition，避免抽搐） ===
         Vector3 platformVelocity = Vector3.zero;
-        if (wasInShadowLastFrame && lastActiveShadowSource != null)
+        Vector3 platformDisplacement = Vector3.zero;
+        if (isGrounded && wasInShadowLastFrame && lastActiveShadowSource != null)
         {
             Vector3 currentSrcPos = lastActiveShadowSource.transform.position;
             Vector3 displacement = currentSrcPos - lastSourcePos;
             lastSourcePos = currentSrcPos;
 
             if (displacement.magnitude < 1f)
+            {
+                platformDisplacement = displacement;
                 platformVelocity = displacement / Time.fixedDeltaTime;
+            }
         }
+        else if (lastActiveShadowSource != null)
+        {
+            lastSourcePos = lastActiveShadowSource.transform.position;
+        }
+
+        if (isChargingJump && platformDisplacement.sqrMagnitude > 0.0000001f)
+        {
+            rb.MovePosition(rb.position + platformDisplacement);
+            platformVelocity = Vector3.zero;
+        }
+
         lastPlatformVelocity = platformVelocity;
 
         // === 旋转 ===
