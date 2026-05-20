@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: 99a4b7914222254429ccba1e4190bfe8
+guid: 099de26bde3134b4d85984cdf4b28d92
 ModelImporter:
   serializedVersion: 22200
   internalIDToNameTable: []
@@ -33,10 +33,10 @@ ModelImporter:
     extraUserProperties: []
     clipAnimations:
     - serializedVersion: 16
-      name: jump2
+      name: jump
       takeName: Armature|ArmatureAction.001
       internalID: -1422011007694221501
-      firstFrame: 1
+      firstFrame: 0
       lastFrame: 23
       wrapMode: 0
       orientationOffsetY: 0

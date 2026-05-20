@@ -47,6 +47,14 @@ public class PlayerRbController : MonoBehaviour
     [Header("手柄震动")]
     public float rumbleIntensity = 0.5f;
 
+    public Animator mouseAnimator;
+
+    private static readonly int IsMovingHash = Animator.StringToHash("IsMoving");
+    private static readonly int IsJumpingHash = Animator.StringToHash("IsJumping");
+    private static readonly int IdleStateHash = Animator.StringToHash("idle");
+    private static readonly int WalkStateHash = Animator.StringToHash("walk");
+    private static readonly int JumpStateHash = Animator.StringToHash("jump");
+
     private Rigidbody rb;
     private Transform camTransform;
     private CameraOrbit cameraOrbit;
@@ -88,6 +96,7 @@ public class PlayerRbController : MonoBehaviour
     private Vector3 originalScale;
     private Tween chargeShakeTween;
     private Tween chargeScaleTween;
+    private int currentMouseAnimationHash;
 
     void Awake()
     {
@@ -99,6 +108,13 @@ public class PlayerRbController : MonoBehaviour
         {
             camTransform = Camera.main.transform;
             cameraOrbit = camTransform.GetComponentInParent<CameraOrbit>();
+        }
+
+        if (mouseAnimator == null)
+        {
+            GameObject mouseModel = GameObject.Find("鼠鼠模型");
+            if (mouseModel != null)
+                mouseAnimator = mouseModel.GetComponent<Animator>();
         }
     }
 
@@ -121,6 +137,7 @@ public class PlayerRbController : MonoBehaviour
             jumpedThisFlight = false;
 
         UpdateShadowLogic();
+        UpdateMouseAnimation();
 
         // === 蓄力跳跃 ===
         if (isGrounded && !jumpedThisFlight)
@@ -189,6 +206,28 @@ public class PlayerRbController : MonoBehaviour
     }
 
     // ==================== 阴影逻辑 ====================
+
+    private void UpdateMouseAnimation()
+    {
+        if (mouseAnimator == null)
+            return;
+
+        float h = Input.GetAxisRaw("Horizontal");
+        float v = Input.GetAxisRaw("Vertical");
+        bool hasMoveInput = new Vector2(h, v).sqrMagnitude > 0.01f;
+        bool isJumping = !isGrounded || isApplyingJumpForce || rb.velocity.y > 0.5f;
+        bool isMoving = hasMoveInput && !isJumping;
+        int targetStateHash = isJumping ? JumpStateHash : (isMoving ? WalkStateHash : IdleStateHash);
+
+        mouseAnimator.SetBool(IsMovingHash, isMoving);
+        mouseAnimator.SetBool(IsJumpingHash, isJumping);
+
+        if (currentMouseAnimationHash != targetStateHash)
+        {
+            mouseAnimator.CrossFade(targetStateHash, 0.08f);
+            currentMouseAnimationHash = targetStateHash;
+        }
+    }
 
     private void UpdateShadowLogic()
     {
