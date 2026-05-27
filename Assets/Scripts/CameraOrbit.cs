@@ -33,6 +33,12 @@ public class CameraOrbit : MonoBehaviour
     public float mouseWheelDistanceSpeed = 2f;
     public float distanceSmoothSpeed = 10f;
 
+    [Header("Gamepad Zoom")]
+    public bool enableGamepadShoulderZoom = true;
+    public KeyCode gamepadZoomInButton = KeyCode.JoystickButton5;
+    public KeyCode gamepadZoomOutButton = KeyCode.JoystickButton4;
+    public float gamepadButtonDistanceSpeed = 5f;
+
     [Header("Gamepad Axes")]
     public string gamepadLookXAxis = "CameraLookX";
     public string gamepadLookYAxis = "CameraLookY";
@@ -106,10 +112,24 @@ public class CameraOrbit : MonoBehaviour
         targetHeight = Mathf.Clamp(targetHeight, minCameraHeight, maxCameraHeight);
         height = targetHeight;
 
+        float distanceDelta = 0f;
+
         float scroll = Input.GetAxisRaw("Mouse ScrollWheel");
         if (Mathf.Abs(scroll) > 0.001f)
+            distanceDelta -= scroll * mouseWheelDistanceSpeed;
+
+        if (enableGamepadShoulderZoom)
         {
-            targetDistance = Mathf.Clamp(targetDistance - scroll * mouseWheelDistanceSpeed, minDistance, maxDistance);
+            if (Input.GetKey(gamepadZoomInButton))
+                distanceDelta -= gamepadButtonDistanceSpeed * Time.deltaTime;
+
+            if (Input.GetKey(gamepadZoomOutButton))
+                distanceDelta += gamepadButtonDistanceSpeed * Time.deltaTime;
+        }
+
+        if (Mathf.Abs(distanceDelta) > 0.0001f)
+        {
+            targetDistance = Mathf.Clamp(targetDistance + distanceDelta, minDistance, maxDistance);
             distance = targetDistance;
         }
     }
