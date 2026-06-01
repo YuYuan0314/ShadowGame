@@ -2,7 +2,7 @@ Shader "Hidden/Shadow/PixelStyleFullscreen"
 {
     Properties
     {
-        _PixelHeight ("Pixel Height", Range(96, 720)) = 120
+        _PixelHeight ("Pixel Height", Range(96, 720)) = 1
         _ColorLevels ("Color Levels", Range(2, 16)) = 7
         _EdgeStrength ("Edge Strength", Range(0, 4)) = 1.25
         _Blend ("Blend", Range(0, 1)) = 1

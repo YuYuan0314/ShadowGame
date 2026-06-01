@@ -1,6 +1,6 @@
-using System.Collections.Generic;
-using System.Linq;
+﻿using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public class ShadowManager : MonoBehaviour
 {
@@ -9,12 +9,44 @@ public class ShadowManager : MonoBehaviour
     public GameObject receiveShadowObj;
     public List<GameObject> castShadowObjs = new List<GameObject>();
     public LayerMask casterLayer;
+    public Transform player;
 
-    [Header("Projection Accuracy")]
-    [Tooltip("Use mesh vertices instead of only renderer bounds. This makes moving and rotated caster shadows tighter.")]
-    public bool useMeshVerticesForProjection = true;
-    [Tooltip("Maximum vertices sampled from each mesh when building a shadow hull.")]
-    public int maxProjectionVerticesPerMesh = 256;
+    [Header("Depth Shadow Map")]
+    [Min(32)] public int shadowRes = 256;
+    [Min(0.1f)] public float orthoSize = 10f;
+    [Min(0.01f)] public float nearPlane = 0.1f;
+    [Min(0.1f)] public float farPlane = 50f;
+    [Min(0.1f)] public float lightCameraDistance = 20f;
+    [Range(0f, 1f)] public float shadowRatioThreshold = 0.5f;
+    public float depthBias = 0.0015f;
+    public float readbackInterval = 0.05f;
+    public bool useCastShadowObjectsOnly = true;
+    public bool autoCollectRenderers = true;
+    public bool debugLogRatio;
+
+    [Header("Renderer Lists")]
+    public List<Renderer> playerRenderers = new List<Renderer>();
+    public List<Renderer> envRenderers = new List<Renderer>();
+
+    public float CurrentShadowRatio { get; private set; }
+    public bool IsPlayerInShadow { get; private set; }
+    public bool HasDepthResult { get; private set; }
+    public RenderTexture PlayerDepthTexture { get { return rtPlayer; } }
+    public RenderTexture EnvironmentDepthTexture { get { return rtEnv; } }
+
+    private RenderTexture rtPlayer;
+    private RenderTexture rtEnv;
+    private Material depthWriteMat;
+    private CommandBuffer cmdPlayer;
+    private CommandBuffer cmdEnv;
+    private Matrix4x4 lightView;
+    private Matrix4x4 lightProj;
+    private Matrix4x4 lightViewProj;
+    private float[] latestEnvDepth;
+    private bool readbackPending;
+    private float nextReadbackTime;
+    private int currentShadowRes;
+    private GameObject currentShadowSource;
 
     private struct NPlane
     {
@@ -24,178 +56,554 @@ public class ShadowManager : MonoBehaviour
         public Vector3 v;
     }
 
-    private NPlane shadowPlane;
-    private readonly List<Vector2[]> allHulls = new List<Vector2[]>();
-    private Vector3 lastLightDir;
-    private readonly List<Vector3> lastObjPositions = new List<Vector3>();
-    private readonly List<Quaternion> lastObjRotations = new List<Quaternion>();
-    private readonly List<Vector3> lastObjScales = new List<Vector3>();
-    private bool hullsDirty = true;
-
-    void Update()
+    private void Awake()
     {
-        EnsureShadowHullsCurrent();
+        ResolvePlayer();
+        EnsureResources();
+        RefreshRendererLists();
+    }
+
+    private void OnEnable()
+    {
+        EnsureResources();
+    }
+
+    private void Update()
+    {
+        EnsureResources();
+
+        if (autoCollectRenderers && (playerRenderers.Count == 0 || envRenderers.Count == 0))
+        {
+            RefreshRendererLists();
+        }
+
+        if (!readbackPending && Time.unscaledTime >= nextReadbackTime)
+        {
+            RenderAndReadbackDepthMaps();
+        }
+    }
+
+    private void OnDisable()
+    {
+        ReleaseResources();
+    }
+
+    private void OnDestroy()
+    {
+        ReleaseResources();
+    }
+
+    public void RefreshRendererLists()
+    {
+        ResolvePlayer();
+        playerRenderers.Clear();
+        envRenderers.Clear();
+
+        if (player != null)
+        {
+            Renderer[] renderers = player.root.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                if (IsDrawableDepthRenderer(renderers[i]))
+                {
+                    playerRenderers.Add(renderers[i]);
+                }
+            }
+        }
+
+        if (useCastShadowObjectsOnly && castShadowObjs != null && castShadowObjs.Count > 0)
+        {
+            for (int i = 0; i < castShadowObjs.Count; i++)
+            {
+                GameObject obj = castShadowObjs[i];
+                if (obj == null)
+                {
+                    continue;
+                }
+
+                Renderer[] renderers = obj.GetComponentsInChildren<Renderer>(true);
+                for (int j = 0; j < renderers.Length; j++)
+                {
+                    Renderer renderer = renderers[j];
+                    if (IsDrawableDepthRenderer(renderer) && !playerRenderers.Contains(renderer) && !envRenderers.Contains(renderer))
+                    {
+                        envRenderers.Add(renderer);
+                    }
+                }
+            }
+        }
+        else
+        {
+            Renderer[] allRenderers = FindObjectsOfType<Renderer>(true);
+            for (int i = 0; i < allRenderers.Length; i++)
+            {
+                Renderer renderer = allRenderers[i];
+                if (!IsDrawableDepthRenderer(renderer))
+                {
+                    continue;
+                }
+                if (player != null && renderer.transform.root == player.root)
+                {
+                    continue;
+                }
+                if (renderer.GetComponentInParent<Canvas>() != null)
+                {
+                    continue;
+                }
+
+                envRenderers.Add(renderer);
+            }
+        }
     }
 
     public GameObject GetProjectedShadowSource(Vector3 worldPoint)
     {
-        EnsureShadowHullsCurrent();
-        if (receiveShadowObj == null) return null;
-
-        Vector2 p = To2D(worldPoint, shadowPlane);
-        for (int i = 0; i < allHulls.Count; i++)
+        if (!IsInProjectedArea(worldPoint))
         {
-            if (i >= castShadowObjs.Count) continue;
-
-            GameObject candidate = castShadowObjs[i];
-            if (candidate == null || !candidate.activeInHierarchy) continue;
-
-            if (IsPointInConvexPolygon(allHulls[i], p))
-                return candidate;
+            if (IsPlayerInShadow)
+            {
+                return currentShadowSource;
+            }
+            return null;
         }
 
-        return null;
+        GameObject source = FindShadowSourceByRay(worldPoint);
+        if (source != null)
+        {
+            currentShadowSource = source;
+        }
+
+        if (currentShadowSource != null)
+        {
+            return currentShadowSource;
+        }
+        return source;
     }
 
     public GameObject GetShadowSource(Vector3 worldPoint)
     {
-        EnsureShadowHullsCurrent();
-        if (receiveShadowObj == null || dirLight == null) return null;
+        return GetProjectedShadowSource(worldPoint);
+    }
 
-        Vector2 p = To2D(worldPoint, shadowPlane);
-        for (int i = 0; i < allHulls.Count; i++)
+    public bool IsInProjectedArea(Vector3 worldPoint)
+    {
+        float pointDepth;
+        float envDepth;
+        if (TrySampleEnvironmentDepth(worldPoint, out pointDepth, out envDepth))
         {
-            if (!IsPointInConvexPolygon(allHulls[i], p)) continue;
-            if (i >= castShadowObjs.Count) continue;
+            return pointDepth > envDepth + depthBias;
+        }
 
-            GameObject candidate = castShadowObjs[i];
-            if (candidate == null || !candidate.activeInHierarchy) continue;
+        return FindShadowSourceByRay(worldPoint) != null;
+    }
 
-            Vector3 reverseLightDir = -dirLight.transform.forward;
-            Vector3 rayStart = worldPoint + reverseLightDir * -0.1f;
-            if (Physics.Raycast(rayStart, reverseLightDir, out RaycastHit hit, 100f, casterLayer))
+    public bool IsNearProjectedArea(Vector3 worldPoint, float tolerance)
+    {
+        if (IsInProjectedArea(worldPoint))
+        {
+            return true;
+        }
+
+        Vector3 right = GetLightRight();
+        Vector3 up = GetLightUp();
+        return IsInProjectedArea(worldPoint + right * tolerance)
+            || IsInProjectedArea(worldPoint - right * tolerance)
+            || IsInProjectedArea(worldPoint + up * tolerance)
+            || IsInProjectedArea(worldPoint - up * tolerance);
+    }
+
+    public Vector3 GetSafePositionInShadow(GameObject caster)
+    {
+        if (caster == null || receiveShadowObj == null || dirLight == null)
+        {
+            return Vector3.zero;
+        }
+
+        NPlane plane = GetReceivePlane(receiveShadowObj);
+        Bounds bounds;
+        if (!TryGetRendererBounds(caster, out bounds))
+        {
+            return Vector3.zero;
+        }
+
+        Vector3 lightDir = dirLight.transform.forward;
+        return ProjectPointToPlane(bounds.center, plane.plane, lightDir);
+    }
+
+    public void RenderAndReadbackDepthMaps()
+    {
+        if (dirLight == null || player == null || depthWriteMat == null || rtPlayer == null || rtEnv == null)
+        {
+            return;
+        }
+
+        UpdateLightMatrices();
+        RenderDepthMap(cmdPlayer, rtPlayer, playerRenderers);
+        RenderDepthMap(cmdEnv, rtEnv, envRenderers);
+
+        readbackPending = true;
+        nextReadbackTime = Time.unscaledTime + Mathf.Max(0f, readbackInterval);
+
+        AsyncGPUReadback.Request(rtPlayer, 0, TextureFormat.RFloat, OnPlayerDepthReadback);
+    }
+
+    private void OnPlayerDepthReadback(AsyncGPUReadbackRequest reqPlayer)
+    {
+        if (this == null)
+        {
+            return;
+        }
+
+        if (reqPlayer.hasError)
+        {
+            readbackPending = false;
+            Debug.LogWarning("Player depth RT readback error", this);
+            return;
+        }
+
+        float[] playerDepth = reqPlayer.GetData<float>().ToArray();
+        AsyncGPUReadback.Request(rtEnv, 0, TextureFormat.RFloat, delegate(AsyncGPUReadbackRequest reqEnv)
+        {
+            OnEnvironmentDepthReadback(reqEnv, playerDepth);
+        });
+    }
+
+    private void OnEnvironmentDepthReadback(AsyncGPUReadbackRequest reqEnv, float[] playerDepth)
+    {
+        if (this == null)
+        {
+            return;
+        }
+
+        readbackPending = false;
+        if (reqEnv.hasError)
+        {
+            Debug.LogWarning("Environment depth RT readback error", this);
+            return;
+        }
+
+        latestEnvDepth = reqEnv.GetData<float>().ToArray();
+        EvaluateShadowRatio(playerDepth, latestEnvDepth);
+    }
+
+    private void EvaluateShadowRatio(float[] playerDepth, float[] envDepth)
+    {
+        int totalPlayerPixels = 0;
+        int shadowedPixels = 0;
+        int count = Mathf.Min(playerDepth.Length, envDepth.Length);
+
+        for (int i = 0; i < count; i++)
+        {
+            float pDepth = playerDepth[i];
+            if (pDepth >= 0.9999f)
             {
-                if (hit.collider.gameObject == candidate || hit.transform.IsChildOf(candidate.transform))
-                    return candidate;
+                continue;
             }
+
+            totalPlayerPixels++;
+            if (pDepth > envDepth[i] + depthBias)
+            {
+                shadowedPixels++;
+            }
+        }
+
+        if (totalPlayerPixels > 0)
+        {
+            CurrentShadowRatio = shadowedPixels / (float)totalPlayerPixels;
+        }
+        else
+        {
+            CurrentShadowRatio = 0f;
+        }
+
+        IsPlayerInShadow = CurrentShadowRatio >= shadowRatioThreshold;
+        HasDepthResult = totalPlayerPixels > 0;
+
+        if (IsPlayerInShadow && player != null)
+        {
+            GameObject source = FindShadowSourceByRay(player.position + Vector3.up * 0.05f);
+            if (source != null)
+            {
+                currentShadowSource = source;
+            }
+        }
+
+        if (debugLogRatio)
+        {
+            Debug.Log("Player shadow ratio: " + CurrentShadowRatio.ToString("P1") + " -> " + (IsPlayerInShadow ? "In shadow" : "Exposed"), this);
+        }
+    }
+
+    private void EnsureResources()
+    {
+        if (currentShadowRes != shadowRes || rtPlayer == null || rtEnv == null)
+        {
+            ReleaseRenderTextures();
+            currentShadowRes = Mathf.Max(32, shadowRes);
+            rtPlayer = CreateDepthTexture("PlayerDepthRT");
+            rtEnv = CreateDepthTexture("EnvironmentDepthRT");
+            latestEnvDepth = null;
+            HasDepthResult = false;
+        }
+
+        if (depthWriteMat == null)
+        {
+            Shader depthShader = Shader.Find("Hidden/WriteDepth");
+            if (depthShader != null)
+            {
+                depthWriteMat = new Material(depthShader);
+                depthWriteMat.hideFlags = HideFlags.HideAndDontSave;
+            }
+            else
+            {
+                Debug.LogError("Shader Hidden/WriteDepth not found. Create Assets/Shaders/WriteDepth.shader.", this);
+            }
+        }
+
+        if (cmdPlayer == null)
+        {
+            cmdPlayer = new CommandBuffer();
+            cmdPlayer.name = "PlayerDepth";
+        }
+        if (cmdEnv == null)
+        {
+            cmdEnv = new CommandBuffer();
+            cmdEnv.name = "EnvironmentDepth";
+        }
+    }
+
+    private RenderTexture CreateDepthTexture(string textureName)
+    {
+        RenderTexture rt = new RenderTexture(currentShadowRes, currentShadowRes, 24, RenderTextureFormat.RFloat);
+        rt.name = textureName;
+        rt.filterMode = FilterMode.Point;
+        rt.wrapMode = TextureWrapMode.Clamp;
+        rt.useMipMap = false;
+        rt.autoGenerateMips = false;
+        rt.Create();
+        return rt;
+    }
+
+    private void ReleaseResources()
+    {
+        ReleaseRenderTextures();
+
+        if (cmdPlayer != null)
+        {
+            cmdPlayer.Release();
+            cmdPlayer = null;
+        }
+
+        if (cmdEnv != null)
+        {
+            cmdEnv.Release();
+            cmdEnv = null;
+        }
+
+        if (depthWriteMat != null)
+        {
+            if (Application.isPlaying)
+            {
+                Destroy(depthWriteMat);
+            }
+            else
+            {
+                DestroyImmediate(depthWriteMat);
+            }
+            depthWriteMat = null;
+        }
+    }
+
+    private void ReleaseRenderTextures()
+    {
+        if (rtPlayer != null)
+        {
+            rtPlayer.Release();
+            if (Application.isPlaying)
+            {
+                Destroy(rtPlayer);
+            }
+            else
+            {
+                DestroyImmediate(rtPlayer);
+            }
+            rtPlayer = null;
+        }
+
+        if (rtEnv != null)
+        {
+            rtEnv.Release();
+            if (Application.isPlaying)
+            {
+                Destroy(rtEnv);
+            }
+            else
+            {
+                DestroyImmediate(rtEnv);
+            }
+            rtEnv = null;
+        }
+    }
+
+    private void UpdateLightMatrices()
+    {
+        Vector3 center = player != null ? player.position : transform.position;
+        Vector3 lightDir = dirLight.transform.forward.normalized;
+        Vector3 lightPos = center - lightDir * Mathf.Max(lightCameraDistance, nearPlane + 0.1f);
+        Vector3 up = Mathf.Abs(Vector3.Dot(lightDir, Vector3.up)) > 0.98f ? Vector3.forward : Vector3.up;
+
+        lightView = Matrix4x4.LookAt(lightPos, lightPos + lightDir, up);
+        lightProj = Matrix4x4.Ortho(-orthoSize, orthoSize, -orthoSize, orthoSize, nearPlane, farPlane);
+        lightViewProj = lightProj * lightView;
+    }
+
+    private void RenderDepthMap(CommandBuffer cmd, RenderTexture target, List<Renderer> renderers)
+    {
+        cmd.Clear();
+        cmd.SetRenderTarget(target);
+        cmd.ClearRenderTarget(true, true, Color.white);
+        cmd.SetViewProjectionMatrices(lightView, lightProj);
+
+        for (int i = 0; i < renderers.Count; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (!IsDrawableDepthRenderer(renderer))
+            {
+                continue;
+            }
+            cmd.DrawRenderer(renderer, depthWriteMat);
+        }
+
+        Graphics.ExecuteCommandBuffer(cmd);
+    }
+
+    private bool TrySampleEnvironmentDepth(Vector3 worldPoint, out float pointDepth, out float envDepth)
+    {
+        pointDepth = 1f;
+        envDepth = 1f;
+
+        if (latestEnvDepth == null || latestEnvDepth.Length == 0 || currentShadowRes <= 0)
+        {
+            return false;
+        }
+
+        Vector4 clip = lightViewProj * new Vector4(worldPoint.x, worldPoint.y, worldPoint.z, 1f);
+        if (Mathf.Abs(clip.w) < 0.0001f)
+        {
+            return false;
+        }
+
+        Vector3 ndc = new Vector3(clip.x / clip.w, clip.y / clip.w, clip.z / clip.w);
+        float u = ndc.x * 0.5f + 0.5f;
+        float v = ndc.y * 0.5f + 0.5f;
+        pointDepth = ndc.z;
+
+        if (u < 0f || u > 1f || v < 0f || v > 1f || pointDepth < 0f || pointDepth > 1f)
+        {
+            return false;
+        }
+
+        int x = Mathf.Clamp(Mathf.FloorToInt(u * currentShadowRes), 0, currentShadowRes - 1);
+        int y = Mathf.Clamp(Mathf.FloorToInt(v * currentShadowRes), 0, currentShadowRes - 1);
+        int index = y * currentShadowRes + x;
+        if (index < 0 || index >= latestEnvDepth.Length)
+        {
+            return false;
+        }
+
+        envDepth = latestEnvDepth[index];
+        return envDepth < 0.9999f;
+    }
+
+    private GameObject FindShadowSourceByRay(Vector3 worldPoint)
+    {
+        if (dirLight == null)
+        {
+            return null;
+        }
+
+        Vector3 lightDir = dirLight.transform.forward.normalized;
+        Vector3 rayStart = worldPoint - lightDir * Mathf.Max(lightCameraDistance, farPlane * 0.5f);
+        float rayDistance = Mathf.Max(farPlane, lightCameraDistance * 2f);
+        RaycastHit hit;
+
+        if (Physics.Raycast(rayStart, lightDir, out hit, rayDistance, casterLayer, QueryTriggerInteraction.Ignore))
+        {
+            for (int i = 0; i < castShadowObjs.Count; i++)
+            {
+                GameObject candidate = castShadowObjs[i];
+                if (candidate == null)
+                {
+                    continue;
+                }
+                if (hit.collider.gameObject == candidate || hit.transform.IsChildOf(candidate.transform))
+                {
+                    return candidate;
+                }
+            }
+
+            return hit.collider.gameObject;
         }
 
         return null;
     }
 
-    public bool IsInProjectedArea(Vector3 worldPoint)
+    private bool IsDrawableDepthRenderer(Renderer renderer)
     {
-        EnsureShadowHullsCurrent();
-        if (receiveShadowObj == null) return false;
-
-        Vector2 p = To2D(worldPoint, shadowPlane);
-        return allHulls.Any(hull => IsPointInConvexPolygon(hull, p));
-    }
-
-    public bool IsNearProjectedArea(Vector3 worldPoint, float tolerance)
-    {
-        EnsureShadowHullsCurrent();
-        if (receiveShadowObj == null) return false;
-
-        Vector2 p = To2D(worldPoint, shadowPlane);
-        foreach (var hull in allHulls)
+        if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy)
         {
-            if (IsPointNearConvexPolygon(hull, p, tolerance))
-                return true;
+            return false;
         }
 
-        return false;
-    }
-
-    public Vector3 GetSafePositionInShadow(GameObject caster)
-    {
-        EnsureShadowHullsCurrent();
-        if (caster == null || receiveShadowObj == null)
-            return Vector3.zero;
-
-        int index = castShadowObjs.IndexOf(caster);
-        if (index < 0 || index >= allHulls.Count)
-            return Vector3.zero;
-
-        Vector2[] hull = allHulls[index];
-        if (hull.Length < 3)
-            return Vector3.zero;
-
-        Vector2 centroid = Vector2.zero;
-        for (int i = 0; i < hull.Length; i++)
-            centroid += hull[i];
-        centroid /= hull.Length;
-
-        return shadowPlane.origin + shadowPlane.u * centroid.x + shadowPlane.v * centroid.y;
-    }
-
-    public void UpdateAllShadowHulls()
-    {
-        if (receiveShadowObj == null || dirLight == null) return;
-
-        shadowPlane = GetReceivePlane(receiveShadowObj);
-        allHulls.Clear();
-        Vector3 lightDir = dirLight.transform.forward;
-
-        foreach (var obj in castShadowObjs)
+        if (renderer is LineRenderer || renderer is TrailRenderer || renderer is ParticleSystemRenderer)
         {
-            if (obj == null || !obj.activeInHierarchy || obj.transform.lossyScale.sqrMagnitude < 0.001f)
-            {
-                allHulls.Add(new Vector2[0]);
-                continue;
-            }
+            return false;
+        }
 
-            List<Vector2> points2D = GetProjectionSourcePoints(obj)
-                .Select(point => ProjectPointToPlane(point, shadowPlane.plane, lightDir))
-                .Select(point => To2D(point, shadowPlane))
-                .ToList();
+        return renderer.GetComponent<MeshFilter>() != null || renderer is SkinnedMeshRenderer;
+    }
 
-            allHulls.Add(GrahamScan(points2D).ToArray());
+    private void ResolvePlayer()
+    {
+        if (player != null)
+        {
+            return;
+        }
+
+        GameObject playerObject = GameObject.FindGameObjectWithTag("Player");
+        if (playerObject == null)
+        {
+            playerObject = GameObject.Find("Player");
+        }
+
+        if (playerObject != null)
+        {
+            player = playerObject.transform;
         }
     }
 
-    private void EnsureShadowHullsCurrent()
+    private Vector3 GetLightRight()
     {
-        if (dirLight == null || receiveShadowObj == null) return;
-
-        if (hullsDirty || dirLight.transform.forward != lastLightDir || DidObjectsMove())
+        if (dirLight == null)
         {
-            UpdateAllShadowHulls();
-            CacheStates();
-            hullsDirty = false;
+            return Vector3.right;
         }
+
+        Vector3 forward = dirLight.transform.forward.normalized;
+        Vector3 up = Mathf.Abs(Vector3.Dot(forward, Vector3.up)) > 0.98f ? Vector3.forward : Vector3.up;
+        return Vector3.Cross(up, forward).normalized;
     }
 
-    private bool DidObjectsMove()
+    private Vector3 GetLightUp()
     {
-        if (castShadowObjs.Count != lastObjPositions.Count) return true;
-
-        for (int i = 0; i < castShadowObjs.Count; i++)
+        if (dirLight == null)
         {
-            GameObject obj = castShadowObjs[i];
-            if (obj == null) continue;
-
-            if ((obj.transform.position - lastObjPositions[i]).sqrMagnitude > 0.0001f) return true;
-            if (Quaternion.Angle(obj.transform.rotation, lastObjRotations[i]) > 0.01f) return true;
-            if ((obj.transform.lossyScale - lastObjScales[i]).sqrMagnitude > 0.0001f) return true;
+            return Vector3.forward;
         }
 
-        return false;
-    }
-
-    private void CacheStates()
-    {
-        lastLightDir = dirLight != null ? dirLight.transform.forward : Vector3.zero;
-
-        lastObjPositions.Clear();
-        lastObjRotations.Clear();
-        lastObjScales.Clear();
-        foreach (var obj in castShadowObjs)
-        {
-            lastObjPositions.Add(obj != null ? obj.transform.position : Vector3.zero);
-            lastObjRotations.Add(obj != null ? obj.transform.rotation : Quaternion.identity);
-            lastObjScales.Add(obj != null ? obj.transform.lossyScale : Vector3.zero);
-        }
+        Vector3 forward = dirLight.transform.forward.normalized;
+        Vector3 right = GetLightRight();
+        return Vector3.Cross(forward, right).normalized;
     }
 
     private NPlane GetReceivePlane(GameObject obj)
@@ -203,149 +611,53 @@ public class ShadowManager : MonoBehaviour
         Vector3 normal = obj.transform.up;
         Vector3 origin = obj.transform.position;
         Plane plane = new Plane(normal, origin);
-
         Vector3 u = Vector3.Cross(normal, Mathf.Abs(normal.y) > 0.9f ? Vector3.forward : Vector3.up).normalized;
         Vector3 v = Vector3.Cross(u, normal).normalized;
-
-        return new NPlane { plane = plane, origin = origin, u = u, v = v };
+        NPlane result = new NPlane();
+        result.plane = plane;
+        result.origin = origin;
+        result.u = u;
+        result.v = v;
+        return result;
     }
 
     private Vector3 ProjectPointToPlane(Vector3 point, Plane plane, Vector3 direction)
     {
         float dot = Vector3.Dot(plane.normal, direction);
         if (Mathf.Abs(dot) < 0.0001f)
+        {
             return point;
+        }
 
         float t = -plane.GetDistanceToPoint(point) / dot;
         return point + direction * t;
     }
 
-    private Vector2 To2D(Vector3 point, NPlane plane)
+    private bool TryGetRendererBounds(GameObject obj, out Bounds bounds)
     {
-        Vector3 local = point - plane.origin;
-        return new Vector2(Vector3.Dot(local, plane.u), Vector3.Dot(local, plane.v));
-    }
+        bounds = new Bounds(obj.transform.position, Vector3.zero);
+        Renderer[] renderers = obj.GetComponentsInChildren<Renderer>();
+        bool hasBounds = false;
 
-    private float Cross(Vector2 origin, Vector2 a, Vector2 b)
-    {
-        return (a.x - origin.x) * (b.y - origin.y) - (b.x - origin.x) * (a.y - origin.y);
-    }
-
-    private List<Vector2> GrahamScan(List<Vector2> points)
-    {
-        points = points
-            .Where(point => float.IsFinite(point.x) && float.IsFinite(point.y))
-            .Distinct()
-            .ToList();
-
-        if (points.Count < 3)
-            return points;
-
-        points = points.OrderBy(point => point.x).ThenBy(point => point.y).ToList();
-
-        List<Vector2> lower = new List<Vector2>();
-        foreach (Vector2 point in points)
+        for (int i = 0; i < renderers.Length; i++)
         {
-            while (lower.Count >= 2 && Cross(lower[lower.Count - 2], lower[lower.Count - 1], point) <= 0f)
-                lower.RemoveAt(lower.Count - 1);
-            lower.Add(point);
-        }
-
-        List<Vector2> upper = new List<Vector2>();
-        for (int i = points.Count - 1; i >= 0; i--)
-        {
-            Vector2 point = points[i];
-            while (upper.Count >= 2 && Cross(upper[upper.Count - 2], upper[upper.Count - 1], point) <= 0f)
-                upper.RemoveAt(upper.Count - 1);
-            upper.Add(point);
-        }
-
-        lower.RemoveAt(lower.Count - 1);
-        upper.RemoveAt(upper.Count - 1);
-        lower.AddRange(upper);
-        return lower;
-    }
-
-    private bool IsPointInConvexPolygon(Vector2[] hull, Vector2 point)
-    {
-        if (hull == null || hull.Length < 3) return false;
-
-        for (int i = 0; i < hull.Length; i++)
-        {
-            if (Cross(hull[i], hull[(i + 1) % hull.Length], point) < -0.001f)
-                return false;
-        }
-
-        return true;
-    }
-
-    private bool IsPointNearConvexPolygon(Vector2[] hull, Vector2 point, float tolerance)
-    {
-        if (hull == null || hull.Length < 3) return false;
-        if (IsPointInConvexPolygon(hull, point)) return true;
-
-        for (int i = 0; i < hull.Length; i++)
-        {
-            Vector2 a = hull[i];
-            Vector2 b = hull[(i + 1) % hull.Length];
-            if (PointToSegmentDistance(point, a, b) < tolerance)
-                return true;
-        }
-
-        return false;
-    }
-
-    private float PointToSegmentDistance(Vector2 point, Vector2 a, Vector2 b)
-    {
-        Vector2 ab = b - a;
-        float t = Vector2.Dot(point - a, ab) / Mathf.Max(Vector2.Dot(ab, ab), 0.0001f);
-        t = Mathf.Clamp01(t);
-        return Vector2.Distance(point, a + ab * t);
-    }
-
-    private IEnumerable<Vector3> GetProjectionSourcePoints(GameObject obj)
-    {
-        if (useMeshVerticesForProjection)
-        {
-            List<Vector3> meshPoints = new List<Vector3>();
-            MeshFilter[] meshFilters = obj.GetComponentsInChildren<MeshFilter>();
-            foreach (var meshFilter in meshFilters)
+            Renderer renderer = renderers[i];
+            if (renderer == null || !renderer.enabled)
             {
-                if (meshFilter == null || meshFilter.sharedMesh == null) continue;
-                if (!meshFilter.sharedMesh.isReadable) continue;
-
-                Vector3[] vertices = meshFilter.sharedMesh.vertices;
-                int step = Mathf.Max(1, vertices.Length / Mathf.Max(1, maxProjectionVerticesPerMesh));
-                for (int i = 0; i < vertices.Length; i += step)
-                    meshPoints.Add(meshFilter.transform.TransformPoint(vertices[i]));
+                continue;
             }
 
-            if (meshPoints.Count >= 3)
-                return meshPoints;
+            if (!hasBounds)
+            {
+                bounds = renderer.bounds;
+                hasBounds = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
         }
 
-        return GetBoundsWorldPoints(obj);
-    }
-
-    private IEnumerable<Vector3> GetBoundsWorldPoints(GameObject obj)
-    {
-        Bounds bounds = new Bounds(obj.transform.position, Vector3.zero);
-        Renderer[] renderers = obj.GetComponentsInChildren<Renderer>();
-        foreach (var renderer in renderers)
-            bounds.Encapsulate(renderer.bounds);
-
-        Vector3 min = bounds.min;
-        Vector3 max = bounds.max;
-        return new Vector3[]
-        {
-            new Vector3(min.x, min.y, min.z),
-            new Vector3(min.x, min.y, max.z),
-            new Vector3(min.x, max.y, min.z),
-            new Vector3(min.x, max.y, max.z),
-            new Vector3(max.x, min.y, min.z),
-            new Vector3(max.x, min.y, max.z),
-            new Vector3(max.x, max.y, min.z),
-            new Vector3(max.x, max.y, max.z)
-        };
+        return hasBounds;
     }
 }
