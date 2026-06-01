@@ -41,6 +41,9 @@ public class PlayerRbController : MonoBehaviour
     public float resetGracePeriod = 0.5f;
     public Vector3 shadowOffset = new Vector3(0, 0.1f, 0);
 
+    [Header("阴影外移动")]
+    [Range(0f, 1f)] public float outsideShadowMoveMultiplier = 0.1f;
+
     [Header("当前状态")]
     public float currentLightTimer = 0f;
 
@@ -256,11 +259,7 @@ public class PlayerRbController : MonoBehaviour
         if (wasInShadowLastFrame && !isSafeForMomentum)
         {
             if (!jumpedThisFlight)
-            {
                 outOfShadowFrames++;
-                if (outOfShadowFrames > 3)
-                    StripPlatformMomentum();
-            }
         }
         else
         {
@@ -304,10 +303,9 @@ public class PlayerRbController : MonoBehaviour
         wasInShadowLastFrame = isSafeForMomentum;
     }
 
-    private void StripPlatformMomentum()
+private void StripPlatformMomentum()
     {
-        // 离开阴影时清零水平速度，防止平台惯性带出阴影
-        rb.velocity = new Vector3(0, rb.velocity.y, 0);
+        // 保留旧接口，当前移动逻辑不再用它阻止玩家离开阴影。
     }
 
     private void ExecuteShadowReset()
@@ -489,6 +487,7 @@ public class PlayerRbController : MonoBehaviour
         Vector3 camForward = Vector3.ProjectOnPlane(camTransform.forward, Vector3.up).normalized;
         Vector3 camRight = Vector3.ProjectOnPlane(camTransform.right, Vector3.up).normalized;
         Vector3 moveDir = (camForward * v + camRight * h).normalized;
+        float activeMoveMultiplier = 1f;
 
         // === 平台速度追踪（用速度替代 MovePosition，避免抽搐） ===
         Vector3 platformVelocity = Vector3.zero;
@@ -528,22 +527,14 @@ public class PlayerRbController : MonoBehaviour
             if (moveDir.magnitude > 0.1f)
             {
                 Vector3 nextPos = transform.position + moveDir * (moveSpeed * Time.fixedDeltaTime);
-                bool atShadowEdge = !shadowManager.IsInProjectedArea(nextPos) || exposedBySpotlight;
-                bool isJumping = rb.velocity.y > 0.5f;
+                bool outsideShadow = exposedBySpotlight || !shadowManager.IsInProjectedArea(nextPos);
+                activeMoveMultiplier = outsideShadow ? outsideShadowMoveMultiplier : 1f;
 
-                if (atShadowEdge && !isJumping)
-                {
-                    // 阴影边缘：只保留平台速度，禁止玩家自主移动
-                    rb.velocity = new Vector3(platformVelocity.x, rb.velocity.y, platformVelocity.z);
-                }
-                else
-                {
-                    // 目标速度 = 平台速度 + 玩家输入速度
-                    Vector3 targetVel = platformVelocity + moveDir * moveSpeed;
-                    Vector3 currentHoriz = new Vector3(rb.velocity.x, 0, rb.velocity.z);
-                    Vector3 desiredHoriz = new Vector3(targetVel.x, 0, targetVel.z);
-                    rb.AddForce((desiredHoriz - currentHoriz) * 10f, ForceMode.Force);
-                }
+                // 目标速度 = 平台速度 + 玩家输入速度。阴影外不再阻止移动，只降低玩家输入速度。
+                Vector3 targetVel = platformVelocity + moveDir * (moveSpeed * activeMoveMultiplier);
+                Vector3 currentHoriz = new Vector3(rb.velocity.x, 0, rb.velocity.z);
+                Vector3 desiredHoriz = new Vector3(targetVel.x, 0, targetVel.z);
+                rb.AddForce((desiredHoriz - currentHoriz) * 10f, ForceMode.Force);
             }
             else
             {

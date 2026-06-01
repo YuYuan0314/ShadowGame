@@ -7,8 +7,8 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: PixelStyleFullscreen
-  m_Shader: {fileID: 4800000, guid: ac0c00ecf4264ce4ca0cdb144017166e, type: 3}
+  m_Name: MouseWhiteOutline
+  m_Shader: {fileID: 4800000, guid: 5b20caae6547d234fae66fcd87094365, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
@@ -25,14 +25,7 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
-    - _Blend: 1
-    - _ColorLevels: 4
-    - _DitherStrength: 0.08
-    - _EdgeStrength: 0.9
-    - _GridStrength: 0.5
-    - _GridWidth: 0.14
-    - _PixelHeight: 24
-    - _Saturation: 1.18
-    - _Warmth: 0.08
-    m_Colors: []
+    - _OutlineWidth: 0.012
+    m_Colors:
+    - _OutlineColor: {r: 1, g: 1, b: 1, a: 1}
   m_BuildTextureStacks: []

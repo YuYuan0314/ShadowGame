@@ -2,13 +2,15 @@ Shader "Hidden/Shadow/PixelStyleFullscreen"
 {
     Properties
     {
-        _PixelHeight ("Pixel Height", Range(96, 720)) = 1
-        _ColorLevels ("Color Levels", Range(2, 16)) = 7
+        _PixelHeight ("Pixel Height", Range(24, 240)) = 64
+        _ColorLevels ("Color Levels", Range(2, 16)) = 5
         _EdgeStrength ("Edge Strength", Range(0, 4)) = 1.25
         _Blend ("Blend", Range(0, 1)) = 1
         _Saturation ("Saturation", Range(0, 2)) = 1.18
         _Warmth ("Warmth", Range(-1, 1)) = 0.12
         _DitherStrength ("Dither Strength", Range(0, 1)) = 0.16
+        _GridStrength ("Block Grid Strength", Range(0, 1)) = 0.18
+        _GridWidth ("Block Grid Width", Range(0.01, 0.2)) = 0.055
     }
 
     SubShader
@@ -40,6 +42,8 @@ Shader "Hidden/Shadow/PixelStyleFullscreen"
             float _Saturation;
             float _Warmth;
             float _DitherStrength;
+            float _GridStrength;
+            float _GridWidth;
 
             float Hash21(float2 p)
             {
@@ -70,14 +74,22 @@ Shader "Hidden/Shadow/PixelStyleFullscreen"
                 return saturate(color);
             }
 
+            float GetBlockGridMask(float2 uv, float2 grid)
+            {
+                float2 cell = frac(uv * grid);
+                float2 edgeDistance = min(cell, 1.0 - cell);
+                float edge = 1.0 - min(edgeDistance.x, edgeDistance.y) / max(_GridWidth, 0.0001);
+                return saturate(edge);
+            }
+
             half4 Frag(Varyings input) : SV_Target
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
                 float2 uv = saturate(input.texcoord.xy);
                 float aspect = max(_ScreenParams.x / max(_ScreenParams.y, 1.0), 0.001);
-                float pixelHeight = max(16.0, _PixelHeight);
-                float2 grid = float2(max(16.0, floor(pixelHeight * aspect)), pixelHeight);
+                float pixelHeight = max(8.0, _PixelHeight);
+                float2 grid = float2(max(8.0, floor(pixelHeight * aspect)), pixelHeight);
                 float2 pixelCoord = floor(uv * grid);
                 float2 pixelUv = (pixelCoord + 0.5) / grid;
                 float2 pixelSize = 1.0 / grid;
@@ -94,7 +106,11 @@ Shader "Hidden/Shadow/PixelStyleFullscreen"
                 edge = saturate(edge * _EdgeStrength);
 
                 color = ApplyPalette(color, pixelCoord);
-                color = lerp(color, color * 0.55, edge);
+                color = lerp(color, color * 0.62, edge);
+
+                float gridMask = GetBlockGridMask(uv, grid);
+                float3 gridTint = color * 0.52;
+                color = lerp(color, gridTint, gridMask * _GridStrength);
 
                 return half4(lerp(original, saturate(color), saturate(_Blend)), 1.0);
             }
