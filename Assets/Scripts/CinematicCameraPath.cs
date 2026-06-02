@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using DG.Tweening;
 
 [RequireComponent(typeof(Collider))]
@@ -72,6 +72,7 @@ public class CinematicCameraPath : MonoBehaviour
     {
         playerController = pc;
         playerRb = pc.GetComponent<Rigidbody>();
+        playerController.StopMovementForCinematic();
 
         camTransform = Camera.main.transform;
         cameraOrbit = camTransform.GetComponentInParent<CameraOrbit>();
@@ -82,6 +83,7 @@ public class CinematicCameraPath : MonoBehaviour
         camOriginalLocalRot = camTransform.localRotation;
 
         playerRb.velocity = Vector3.zero;
+        playerRb.angularVelocity = Vector3.zero;
         playerRb.isKinematic = true;
         playerController.enabled = false;
 
@@ -246,3 +248,4 @@ public class CinematicCameraPath : MonoBehaviour
     }
 #endif
 }
+

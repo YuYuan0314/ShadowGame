@@ -1,13 +1,13 @@
-using UnityEngine;
+﻿using UnityEngine;
 using DG.Tweening;
 
 [RequireComponent(typeof(Rigidbody))]
 public class PlayerRbController : MonoBehaviour
 {
-    [Header("引用")]
+    [Header("References")]
     public ShadowManager shadowManager;
 
-    [Header("移动参数")]
+    [Header("Movement")]
     public float moveSpeed = 7f;
     public float turnSpeed = 15f;
     public float groundDrag = 5f;
@@ -15,6 +15,8 @@ public class PlayerRbController : MonoBehaviour
     public float minJumpForce = 4f;
     public float maxJumpForce = 20f;
     public float chargeTimeToMax = 1.5f;
+    [Tooltip("Charge response curve. Default is fast at first, then slower near full charge.")]
+    public AnimationCurve chargeCurve = new AnimationCurve(new Keyframe(0f, 0f, 2f, 2f), new Keyframe(1f, 1f, 0f, 0f));
 
     [Header("Jump Drive")]
     [Tooltip("How long the scripted upward jump force is applied after releasing Jump.")]
@@ -26,14 +28,14 @@ public class PlayerRbController : MonoBehaviour
     [Tooltip("Extra gravity multiplier applied only while falling after the scripted jump force is done.")]
     public float fallGravityMultiplier = 2.5f;
 
-    [Header("蓄力特效")]
+    [Header("Charge Effects")]
     public float squishAmount = 0.4f;
     public float stretchAmount = 0.15f;
     public float shakeStrength = 0.08f;
     public float gravityMultiplier = 1.5f;
     public LayerMask groundLayer = ~0;
 
-    [Header("阴影/暴露机制")]
+    [Header("Shadow Exposure")]
     public float maxLightTime = 2f;
     public float maxFollowDistance = 6f;
     public float shadowEdgeTolerance = 0.15f;
@@ -41,13 +43,13 @@ public class PlayerRbController : MonoBehaviour
     public float resetGracePeriod = 0.5f;
     public Vector3 shadowOffset = new Vector3(0, 0.1f, 0);
 
-    [Header("阴影外移动")]
+    [Header("Outside Shadow Movement")]
     [Range(0f, 1f)] public float outsideShadowMoveMultiplier = 0.1f;
 
-    [Header("当前状态")]
+    [Header("Runtime State")]
     public float currentLightTimer = 0f;
 
-    [Header("手柄震动")]
+    [Header("Rumble")]
     public float rumbleIntensity = 0.5f;
 
     public Animator mouseAnimator;
@@ -63,7 +65,7 @@ public class PlayerRbController : MonoBehaviour
     private CameraOrbit cameraOrbit;
     private bool isGrounded;
 
-    // 阴影追踪
+    // 闃村奖杩借釜
     private GameObject lastActiveShadowSource;
     private Vector3 lastSourcePos;
     private Vector3 lastLocalSafePos;
@@ -71,17 +73,17 @@ public class PlayerRbController : MonoBehaviour
     private bool hasSafePos;
     private bool exposedBySpotlight;
 
-    // 重置动画
+    // 閲嶇疆鍔ㄧ敾
     private float resetGraceTimer;
     private bool isResetting;
     private bool jumpedThisFlight;
     private int outOfShadowFrames;
     private int groundedFrames;
 
-    // 平台速度追踪：避免 MovePosition 导致的抽搐
+    // 骞冲彴閫熷害杩借釜锛氶伩鍏?MovePosition 瀵艰嚧鐨勬娊鎼?
     private Vector3 lastPlatformVelocity;
 
-    // 蓄力跳跃
+    // 钃勫姏璺宠穬
     private bool isChargingJump;
     private float jumpChargeStartTime;
     private bool isApplyingJumpForce;
@@ -90,16 +92,21 @@ public class PlayerRbController : MonoBehaviour
     private float jumpForceRemainingVelocity;
     private float jumpForceCurveArea;
 
-    // 公开只读状态 (供 JumpTrajectoryPreview 等组件读取)
+    // 鍏紑鍙鐘舵€?(渚?JumpTrajectoryPreview 绛夌粍浠惰鍙?
     public bool IsChargingJump => isChargingJump;
-    public float ChargePercent => isChargingJump
-        ? Mathf.Clamp01((Time.time - jumpChargeStartTime) / chargeTimeToMax)
-        : 0f;
+    public float ChargePercent => isChargingJump ? EvaluateChargePercent() : 0f;
     public Vector3 PlatformVelocity => lastPlatformVelocity;
     private Vector3 originalScale;
     private Tween chargeShakeTween;
     private Tween chargeScaleTween;
     private int currentMouseAnimationHash;
+
+    private float EvaluateChargePercent()
+    {
+        float rawPercent = Mathf.Clamp01((Time.time - jumpChargeStartTime) / Mathf.Max(0.01f, chargeTimeToMax));
+        return chargeCurve != null ? Mathf.Clamp01(chargeCurve.Evaluate(rawPercent)) : rawPercent;
+    }
+
 
     void Awake()
     {
@@ -115,7 +122,7 @@ public class PlayerRbController : MonoBehaviour
 
         if (mouseAnimator == null)
         {
-            GameObject mouseModel = GameObject.Find("鼠鼠模型");
+            GameObject mouseModel = GameObject.Find("榧犻紶妯″瀷");
             if (mouseModel != null)
                 mouseAnimator = mouseModel.GetComponent<Animator>();
         }
@@ -125,7 +132,7 @@ public class PlayerRbController : MonoBehaviour
     {
         if (isResetting) return;
 
-        // 地面检测：带 LayerMask + 帧缓冲，防止半空中误触其他物体
+        // 鍦伴潰妫€娴嬶細甯?LayerMask + 甯х紦鍐诧紝闃叉鍗婄┖涓瑙﹀叾浠栫墿浣?
         bool rayHit = Physics.Raycast(transform.position + Vector3.up * 0.1f, Vector3.down, 0.5f, groundLayer);
         if (rayHit)
             groundedFrames++;
@@ -135,14 +142,14 @@ public class PlayerRbController : MonoBehaviour
 
         rb.drag = isGrounded ? groundDrag : airDrag;
 
-        // 真正落地时才清除跳跃标记（Y 速度已稳定）
+        // 鐪熸钀藉湴鏃舵墠娓呴櫎璺宠穬鏍囪锛圷 閫熷害宸茬ǔ瀹氾級
         if (isGrounded && !isApplyingJumpForce && Mathf.Abs(rb.velocity.y) < 0.5f)
             jumpedThisFlight = false;
 
         UpdateShadowLogic();
         UpdateMouseAnimation();
 
-        // === 蓄力跳跃 ===
+        // === 钃勫姏璺宠穬 ===
         if (isGrounded && !jumpedThisFlight)
         {
             if (Input.GetButtonDown("Jump"))
@@ -151,36 +158,40 @@ public class PlayerRbController : MonoBehaviour
                 jumpChargeStartTime = Time.time;
                 originalScale = transform.localScale;
 
-                // 启动屏幕抖动（通过 CameraOrbit.shakeOffset，避免被 LateUpdate 覆盖）
-                if (cameraOrbit != null)
+                // 鍚姩灞忓箷鎶栧姩锛堥€氳繃 CameraOrbit.shakeOffset锛岄伩鍏嶈 LateUpdate 瑕嗙洊锛?
+                if (cameraOrbit != null && !ShouldSuppressChargeScreenShake())
                     chargeShakeTween = DOTween.To(() => 0f, _ => { }, 1f, 99f)
                         .SetTarget(cameraOrbit);
 
-                // 手柄震动开始
+                // 鎵嬫焺闇囧姩寮€濮?
                 GamepadRumble.SetVibration(0.1f, 0.05f);
             }
 
             if (Input.GetButton("Jump") && isChargingJump)
             {
-                float chargePercent = Mathf.Clamp01((Time.time - jumpChargeStartTime) / chargeTimeToMax);
+                float chargePercent = EvaluateChargePercent();
 
-                // Y 轴压扁 + XZ 轴小幅拉伸（保持体积感）
+                // Y 杞村帇鎵?+ XZ 杞村皬骞呮媺浼革紙淇濇寔浣撶Н鎰燂級
                 float targetSquishY = 1f - squishAmount * chargePercent;
                 float targetStretchXZ = 1f + stretchAmount * chargePercent;
                 transform.localScale = new Vector3(originalScale.x * targetStretchXZ,
                                                     originalScale.y * targetSquishY,
                                                     originalScale.z * targetStretchXZ);
 
-                // 屏幕抖动随蓄力增强（Perlin 噪声写入 CameraOrbit.shakeOffset）
-                if (cameraOrbit != null)
+                // 灞忓箷鎶栧姩闅忚搫鍔涘寮猴紙Perlin 鍣０鍐欏叆 CameraOrbit.shakeOffset锛?
+                if (cameraOrbit != null && !ShouldSuppressChargeScreenShake())
                 {
                     float s = shakeStrength * (0.3f + 0.7f * chargePercent);
                     float sx = (Mathf.PerlinNoise(0, Time.time * 35f) - 0.5f) * 2f * s;
                     float sy = (Mathf.PerlinNoise(Time.time * 35f, 0) - 0.5f) * 2f * s;
                     cameraOrbit.shakeOffset = new Vector3(sx, sy, 0);
                 }
+                else if (cameraOrbit != null)
+                {
+                    cameraOrbit.shakeOffset = Vector3.zero;
+                }
 
-                // 手柄震动随蓄力增强
+                // 鎵嬫焺闇囧姩闅忚搫鍔涘寮?
                 GamepadRumble.SetVibration(
                     Mathf.Lerp(0.1f, rumbleIntensity, chargePercent),
                     Mathf.Lerp(0.05f, rumbleIntensity * 0.5f, chargePercent));
@@ -188,7 +199,7 @@ public class PlayerRbController : MonoBehaviour
 
             if (Input.GetButtonUp("Jump") && isChargingJump)
             {
-                float chargePercent = Mathf.Clamp01((Time.time - jumpChargeStartTime) / chargeTimeToMax);
+                float chargePercent = EvaluateChargePercent();
                 float launchForce = Mathf.Lerp(minJumpForce, maxJumpForce, chargePercent);
 
                 StartScriptedJumpForce(launchForce);
@@ -208,7 +219,7 @@ public class PlayerRbController : MonoBehaviour
         }
     }
 
-    // ==================== 阴影逻辑 ====================
+    // ==================== 闃村奖閫昏緫 ====================
 
     private void UpdateMouseAnimation()
     {
@@ -245,10 +256,14 @@ public class PlayerRbController : MonoBehaviour
         Vector3 checkPoint = transform.position + Vector3.up * 0.05f;
         GameObject source = shadowManager.GetProjectedShadowSource(checkPoint);
         exposedBySpotlight = SpotlightExposureZone.IsAnyPointExposed(checkPoint);
+        bool hasDepthShadowResult = shadowManager.HasDepthResult;
+        bool isInDepthShadow = hasDepthShadowResult ? shadowManager.IsPlayerInShadow : source != null;
+        if (isInDepthShadow && source == null)
+            source = lastActiveShadowSource;
         bool isInProjectedArea = source != null;
 
-        // spotlight 照射区域覆盖阴影判定，强制视为非阴影
-        bool isInShadowNow = isGrounded && isInProjectedArea && !exposedBySpotlight;
+        // spotlight 鐓у皠鍖哄煙瑕嗙洊闃村奖鍒ゅ畾锛屽己鍒惰涓洪潪闃村奖
+        bool isInShadowNow = isGrounded && isInDepthShadow && !exposedBySpotlight;
 
         bool isInEdgeZone = false;
         if (isGrounded && !isInProjectedArea && !exposedBySpotlight)
@@ -289,7 +304,7 @@ public class PlayerRbController : MonoBehaviour
             bool shouldReset = false;
             if (currentLightTimer >= maxLightTime) shouldReset = true;
 
-            // 跳跃过程中不检查距离，避免半空突然坠落
+            // 璺宠穬杩囩▼涓笉妫€鏌ヨ窛绂伙紝閬垮厤鍗婄┖绐佺劧鍧犺惤
             if (!jumpedThisFlight && lastActiveShadowSource != null)
             {
                 float dist = Vector3.Distance(transform.position, lastActiveShadowSource.transform.position);
@@ -303,9 +318,9 @@ public class PlayerRbController : MonoBehaviour
         wasInShadowLastFrame = isSafeForMomentum;
     }
 
-private void StripPlatformMomentum()
+    private void StripPlatformMomentum()
     {
-        // 保留旧接口，当前移动逻辑不再用它阻止玩家离开阴影。
+        // Kept for compatibility; movement no longer uses it to block leaving shadows.
     }
 
     private void ExecuteShadowReset()
@@ -338,7 +353,7 @@ private void StripPlatformMomentum()
 
     private Vector3 DetermineResetTarget()
     {
-        // 优先：传送到 fallback 物体投影阴影的重心（保证在阴影正中央）
+        // 浼樺厛锛氫紶閫佸埌 fallback 鐗╀綋鎶曞奖闃村奖鐨勯噸蹇冿紙淇濊瘉鍦ㄩ槾褰辨涓ぎ锛?
         if (lastActiveShadowSource != null)
         {
             var mover = lastActiveShadowSource.GetComponent<IShadowMover>();
@@ -352,11 +367,11 @@ private void StripPlatformMomentum()
             }
         }
 
-        // 其次：返回上次存档的本地安全坐标
+        // 鍏舵锛氳繑鍥炰笂娆″瓨妗ｇ殑鏈湴瀹夊叏鍧愭爣
         if (hasSafePos && lastActiveShadowSource != null)
             return lastActiveShadowSource.transform.TransformPoint(lastLocalSafePos) + shadowOffset;
 
-        // 兜底
+        // 鍏滃簳
         return transform.position + Vector3.up * 2f;
     }
 
@@ -365,26 +380,26 @@ private void StripPlatformMomentum()
         isResetting = false;
         resetGraceTimer = resetGracePeriod;
 
-        // 先检测当前实际所在的 shadow source，判断回弹到的是 fallback 还是原平台
+        // 鍏堟娴嬪綋鍓嶅疄闄呮墍鍦ㄧ殑 shadow source锛屽垽鏂洖寮瑰埌鐨勬槸 fallback 杩樻槸鍘熷钩鍙?
         Vector3 checkPoint = transform.position + Vector3.up * 0.05f;
         GameObject actualSource = shadowManager.GetProjectedShadowSource(checkPoint);
         bool switchedSource = actualSource != null && actualSource != lastActiveShadowSource;
 
         if (switchedSource)
         {
-            // 回弹到了 fallback 目标 → 切换跟踪源，不碰位置
+            // 鍥炲脊鍒颁簡 fallback 鐩爣 鈫?鍒囨崲璺熻釜婧愶紝涓嶇浣嶇疆
             lastActiveShadowSource = actualSource;
             hasSafePos = false;
             lastLocalSafePos = Vector3.zero;
         }
         else if (hasSafePos && lastActiveShadowSource != null)
         {
-            // 回弹回原移动平台 → 用平台当前位置重算，弥补 DOTween 期间平台的位移
+            // 鍥炲脊鍥炲師绉诲姩骞冲彴 鈫?鐢ㄥ钩鍙板綋鍓嶄綅缃噸绠楋紝寮ヨˉ DOTween 鏈熼棿骞冲彴鐨勪綅绉?
             Vector3 currentSafePos = lastActiveShadowSource.transform.TransformPoint(lastLocalSafePos) + shadowOffset;
             transform.position = currentSafePos;
         }
 
-        // 同步 Rigidbody 位置与速度清零
+        // 鍚屾 Rigidbody 浣嶇疆涓庨€熷害娓呴浂
         rb.position = transform.position;
         rb.velocity = Vector3.zero;
         lastPlatformVelocity = Vector3.zero;
@@ -396,7 +411,7 @@ private void StripPlatformMomentum()
         wasInShadowLastFrame = true;
     }
 
-    // ==================== 移动物理 ====================
+    // ==================== 绉诲姩鐗╃悊 ====================
 
     void FixedUpdate()
     {
@@ -489,7 +504,7 @@ private void StripPlatformMomentum()
         Vector3 moveDir = (camForward * v + camRight * h).normalized;
         float activeMoveMultiplier = 1f;
 
-        // === 平台速度追踪（用速度替代 MovePosition，避免抽搐） ===
+        // === 骞冲彴閫熷害杩借釜锛堢敤閫熷害鏇夸唬 MovePosition锛岄伩鍏嶆娊鎼愶級 ===
         Vector3 platformVelocity = Vector3.zero;
         Vector3 platformDisplacement = Vector3.zero;
         if (isGrounded && wasInShadowLastFrame && lastActiveShadowSource != null)
@@ -517,20 +532,20 @@ private void StripPlatformMomentum()
 
         lastPlatformVelocity = platformVelocity;
 
-        // === 旋转 ===
+        // === 鏃嬭浆 ===
         if (moveDir.magnitude > 0.1f)
             rb.MoveRotation(Quaternion.Slerp(rb.rotation, Quaternion.LookRotation(moveDir), Time.fixedDeltaTime * turnSpeed));
 
-        // === 玩家输入移动 ===
+        // === 鐜╁杈撳叆绉诲姩 ===
         if (isGrounded)
         {
             if (moveDir.magnitude > 0.1f)
             {
                 Vector3 nextPos = transform.position + moveDir * (moveSpeed * Time.fixedDeltaTime);
-                bool outsideShadow = exposedBySpotlight || !shadowManager.IsInProjectedArea(nextPos);
+                bool outsideShadow = exposedBySpotlight || (!shadowManager.IsPlayerInShadow && !shadowManager.IsInProjectedArea(nextPos));
                 activeMoveMultiplier = outsideShadow ? outsideShadowMoveMultiplier : 1f;
 
-                // 目标速度 = 平台速度 + 玩家输入速度。阴影外不再阻止移动，只降低玩家输入速度。
+                // Target velocity = platform velocity + player input velocity. Outside shadow only reduces input speed.
                 Vector3 targetVel = platformVelocity + moveDir * (moveSpeed * activeMoveMultiplier);
                 Vector3 currentHoriz = new Vector3(rb.velocity.x, 0, rb.velocity.z);
                 Vector3 desiredHoriz = new Vector3(targetVel.x, 0, targetVel.z);
@@ -538,7 +553,7 @@ private void StripPlatformMomentum()
             }
             else
             {
-                // 无输入：跟随平台速度
+                // 鏃犺緭鍏ワ細璺熼殢骞冲彴閫熷害
                 rb.velocity = new Vector3(platformVelocity.x, rb.velocity.y, platformVelocity.z);
             }
         }
@@ -548,7 +563,7 @@ private void StripPlatformMomentum()
                 rb.AddForce(moveDir * moveSpeed * 5f, ForceMode.Force);
         }
 
-        // === 速度限制 ===
+        // === 閫熷害闄愬埗 ===
         Vector3 horizVel = new Vector3(rb.velocity.x, 0, rb.velocity.z);
         float limit = isGrounded ? moveSpeed * 1.5f : moveSpeed * 1.2f;
 
@@ -561,22 +576,72 @@ private void StripPlatformMomentum()
             rb.velocity = new Vector3(finalHorizVel.x, rb.velocity.y, finalHorizVel.z);
         }
     }
-
-    private void StopChargeEffects()
+    public void StopMovementForCinematic()
     {
-        // 停止屏幕抖动
+        isChargingJump = false;
+        isApplyingJumpForce = false;
+        jumpForceElapsed = 0f;
+        jumpForceRemainingVelocity = 0f;
+        jumpForceTotalVelocity = 0f;
+
         if (chargeShakeTween != null && chargeShakeTween.IsActive())
             chargeShakeTween.Kill();
         chargeShakeTween = null;
 
-        // 清除 CameraOrbit 的抖动偏移
+        if (chargeScaleTween != null && chargeScaleTween.IsActive())
+            chargeScaleTween.Kill();
+        chargeScaleTween = null;
+
+        if (originalScale != Vector3.zero)
+            transform.localScale = originalScale;
+
         if (cameraOrbit != null)
             cameraOrbit.shakeOffset = Vector3.zero;
 
-        // 停止手柄震动
+        if (mouseAnimator != null)
+        {
+            mouseAnimator.SetBool(IsMovingHash, false);
+            mouseAnimator.SetBool(IsJumpingHash, false);
+            mouseAnimator.CrossFade(IdleStateHash, 0.08f);
+            currentMouseAnimationHash = IdleStateHash;
+        }
+
+        GamepadRumble.Stop();
+    }
+
+    private bool ShouldSuppressChargeScreenShake()
+    {
+        if (lastActiveShadowSource == null)
+            return false;
+
+        if (lastActiveShadowSource.GetComponent<IShadowMover>() != null)
+            return true;
+
+        MonoBehaviour[] behaviours = lastActiveShadowSource.GetComponentsInParent<MonoBehaviour>();
+        for (int i = 0; i < behaviours.Length; i++)
+        {
+            if (behaviours[i] is IShadowMover)
+                return true;
+        }
+
+        return false;
+    }
+
+    private void StopChargeEffects()
+    {
+        // 鍋滄灞忓箷鎶栧姩
+        if (chargeShakeTween != null && chargeShakeTween.IsActive())
+            chargeShakeTween.Kill();
+        chargeShakeTween = null;
+
+        // 娓呴櫎 CameraOrbit 鐨勬姈鍔ㄥ亸绉?
+        if (cameraOrbit != null)
+            cameraOrbit.shakeOffset = Vector3.zero;
+
+        // 鍋滄鎵嬫焺闇囧姩
         GamepadRumble.Stop();
 
-        // 缩放弹回原状（带弹性）
+        // 缂╂斁寮瑰洖鍘熺姸锛堝甫寮规€э級
         chargeScaleTween = transform.DOScale(originalScale, 0.25f).SetEase(Ease.OutBack);
     }
 
@@ -588,3 +653,9 @@ private void StripPlatformMomentum()
         GamepadRumble.Stop();
     }
 }
+
+
+
+
+
+
