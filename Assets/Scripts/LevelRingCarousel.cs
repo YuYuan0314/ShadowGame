@@ -64,6 +64,7 @@ public class LevelRingCarousel : MonoBehaviour
     private float nextAxisMoveTime;
     private bool horizontalAxisAvailable = true;
     private bool submitButtonAvailable = true;
+    private bool loadingScene;
 
     private void Awake()
     {
@@ -75,7 +76,7 @@ public class LevelRingCarousel : MonoBehaviour
 
     private void Update()
     {
-        if (items.Count == 0)
+        if (items.Count == 0 || loadingScene || LevelSceneTransition.IsTransitioning)
             return;
 
         HandleInput();
@@ -144,12 +145,15 @@ public class LevelRingCarousel : MonoBehaviour
 
     public void ConfirmSelection()
     {
-        if (items.Count == 0)
+        if (items.Count == 0 || loadingScene || LevelSceneTransition.IsTransitioning)
             return;
 
         LevelItem item = items[Mathf.Clamp(selectedIndex, 0, items.Count - 1)];
         if (!string.IsNullOrWhiteSpace(item.sceneName))
-            SceneManager.LoadScene(item.sceneName);
+        {
+            RectTransform focusTarget = item.previewImage != null ? item.previewImage.rectTransform : item.card;
+            loadingScene = LevelSceneTransition.LoadScene(item.sceneName, focusTarget);
+        }
     }
 
     public void ApplyLayoutImmediate()

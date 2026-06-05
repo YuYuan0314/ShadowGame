@@ -113,6 +113,7 @@ public class PlayerRbController : MonoBehaviour
         rb = GetComponent<Rigidbody>();
         rb.constraints = RigidbodyConstraints.FreezeRotation;
         rb.interpolation = RigidbodyInterpolation.Interpolate;
+        ResolveShadowManager();
 
         if (Camera.main != null)
         {
@@ -245,6 +246,15 @@ public class PlayerRbController : MonoBehaviour
 
     private void UpdateShadowLogic()
     {
+        ResolveShadowManager();
+        if (shadowManager == null)
+        {
+            exposedBySpotlight = false;
+            currentLightTimer = 0f;
+            wasInShadowLastFrame = true;
+            return;
+        }
+
         if (resetGraceTimer > 0f)
         {
             resetGraceTimer -= Time.deltaTime;
@@ -359,7 +369,7 @@ public class PlayerRbController : MonoBehaviour
             var mover = lastActiveShadowSource.GetComponent<IShadowMover>();
             GameObject fallback = (mover != null) ? mover.GetFallbackTarget() : null;
 
-            if (fallback != null && fallback.activeInHierarchy)
+            if (fallback != null && fallback.activeInHierarchy && shadowManager != null)
             {
                 Vector3 safePos = shadowManager.GetSafePositionInShadow(fallback);
                 if (safePos != Vector3.zero)
@@ -382,7 +392,7 @@ public class PlayerRbController : MonoBehaviour
 
         // 鍏堟娴嬪綋鍓嶅疄闄呮墍鍦ㄧ殑 shadow source锛屽垽鏂洖寮瑰埌鐨勬槸 fallback 杩樻槸鍘熷钩鍙?
         Vector3 checkPoint = transform.position + Vector3.up * 0.05f;
-        GameObject actualSource = shadowManager.GetProjectedShadowSource(checkPoint);
+        GameObject actualSource = shadowManager != null ? shadowManager.GetProjectedShadowSource(checkPoint) : null;
         bool switchedSource = actualSource != null && actualSource != lastActiveShadowSource;
 
         if (switchedSource)
@@ -542,7 +552,7 @@ public class PlayerRbController : MonoBehaviour
             if (moveDir.magnitude > 0.1f)
             {
                 Vector3 nextPos = transform.position + moveDir * (moveSpeed * Time.fixedDeltaTime);
-                bool outsideShadow = exposedBySpotlight || (!shadowManager.IsPlayerInShadow && !shadowManager.IsInProjectedArea(nextPos));
+                bool outsideShadow = exposedBySpotlight || (shadowManager != null && !shadowManager.IsPlayerInShadow && !shadowManager.IsInProjectedArea(nextPos));
                 activeMoveMultiplier = outsideShadow ? outsideShadowMoveMultiplier : 1f;
 
                 // Target velocity = platform velocity + player input velocity. Outside shadow only reduces input speed.
@@ -625,6 +635,14 @@ public class PlayerRbController : MonoBehaviour
         }
 
         return false;
+    }
+
+    private void ResolveShadowManager()
+    {
+        if (shadowManager != null)
+            return;
+
+        shadowManager = FindObjectOfType<ShadowManager>();
     }
 
     private void StopChargeEffects()
