@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: 209da09aa0856e1489e2c7ea14f774c8
+guid: 75458d0befca71f4394ab89067e8d569
 TextureImporter:
   internalIDToNameTable: []
   externalObjects: {}
@@ -93,29 +93,16 @@ TextureImporter:
     ignorePlatformSupport: 0
     androidETC2FallbackOverride: 0
     forceMaximumCompressionQuality_BC6H_BC7: 0
-  - serializedVersion: 3
-    buildTarget: Android
-    maxTextureSize: 2048
-    resizeAlgorithm: 0
-    textureFormat: -1
-    textureCompression: 1
-    compressionQuality: 50
-    crunchedCompression: 0
-    allowsAlphaSplitting: 0
-    overridden: 0
-    ignorePlatformSupport: 0
-    androidETC2FallbackOverride: 0
-    forceMaximumCompressionQuality_BC6H_BC7: 0
   spriteSheet:
     serializedVersion: 2
     sprites:
     - serializedVersion: 2
-      name: "\u5F00\u59CB_0"
+      name: "\u8FD4\u56DE\u952E_0"
       rect:
         serializedVersion: 2
-        x: 1370
-        y: 466
-        width: 321
+        x: 45
+        y: 949
+        width: 142
         height: 107
       alignment: 0
       pivot: {x: 0, y: 0}
@@ -124,8 +111,8 @@ TextureImporter:
       physicsShape: []
       tessellationDetail: 0
       bones: []
-      spriteID: 27a4f976d49476144bab6b64ded0fb79
-      internalID: -488613554
+      spriteID: 1f70061cda5e82343a98c0f421ef401b
+      internalID: 1701252165
       vertices: []
       indices: 
       edges: []
@@ -133,7 +120,7 @@ TextureImporter:
     outline: []
     physicsShape: []
     bones: []
-    spriteID: 5e97eb03825dee720800000000000000
+    spriteID: ba1fc90fceabe3745bd09a194c71f8a7
     internalID: 0
     vertices: []
     indices: 
@@ -141,7 +128,7 @@ TextureImporter:
     weights: []
     secondaryTextures: []
     nameFileIdTable:
-      "\u5F00\u59CB_0": -488613554
+      "\u8FD4\u56DE\u952E_0": 1701252165
   mipmapLimitGroupName: 
   pSDRemoveMatte: 0
   userData: 
