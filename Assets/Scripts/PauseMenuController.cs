@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
@@ -80,6 +81,8 @@ public class PauseMenuController : MonoBehaviour
     private bool cursorWasVisible;
     private CursorLockMode previousLockMode;
     private bool cameraOrbitWasEnabled;
+    private EventSystem eventSystem;
+    private bool eventSystemSendNavigationEvents;
     private readonly List<MonoBehaviour> disabledPlayerBehaviours = new List<MonoBehaviour>();
     private int horizontalAxisDirection;
     private bool cancelButtonAvailable = true;
@@ -144,6 +147,7 @@ public class PauseMenuController : MonoBehaviour
         }
 
         DisablePlayerControl();
+        DisableEventSystemNavigation();
         Time.timeScale = 0f;
 
         if (worldCanvas != null)
@@ -210,6 +214,7 @@ public class PauseMenuController : MonoBehaviour
     {
         Time.timeScale = 1f;
         RestorePlayerControl();
+        RestoreEventSystemNavigation();
         Cursor.visible = cursorWasVisible;
         Cursor.lockState = previousLockMode;
 
@@ -355,6 +360,7 @@ public class PauseMenuController : MonoBehaviour
             cameraOrbit.enabled = cameraOrbitWasEnabled;
 
         RestorePlayerControl();
+        RestoreEventSystemNavigation();
         Time.timeScale = 1f;
         Cursor.visible = cursorWasVisible;
         Cursor.lockState = previousLockMode;
@@ -530,6 +536,25 @@ public class PauseMenuController : MonoBehaviour
                 behaviour.enabled = false;
             }
         }
+    }
+
+    private void DisableEventSystemNavigation()
+    {
+        eventSystem = EventSystem.current;
+
+        if (eventSystem == null)
+            return;
+
+        eventSystemSendNavigationEvents = eventSystem.sendNavigationEvents;
+        eventSystem.sendNavigationEvents = false;
+    }
+
+    private void RestoreEventSystemNavigation()
+    {
+        if (eventSystem != null)
+            eventSystem.sendNavigationEvents = eventSystemSendNavigationEvents;
+
+        eventSystem = null;
     }
 
     private void RestorePlayerControl()

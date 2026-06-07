@@ -55,6 +55,7 @@ public class PauseRadialTabMenu : MonoBehaviour
     public KeyCode gamepadSubmitButton = KeyCode.JoystickButton0;
     public string verticalAxis = "Vertical";
     public bool invertGamepadVerticalAxis = true;
+    public bool suppressKeyboardAxisInput = true;
     public string submitButton = "Submit";
     [Range(0.1f, 1f)] public float axisThreshold = 0.55f;
     public float axisRepeatDelay = 0.3f;
@@ -175,11 +176,15 @@ public class PauseRadialTabMenu : MonoBehaviour
             if (Input.GetKeyDown(previousKey) || Input.GetKeyDown(previousAltKey))
             {
                 MoveSelection(1);
+                axisDirection = 0;
+                nextAxisMoveTime = Time.unscaledTime + axisRepeatDelay;
                 movedWithKey = true;
             }
             else if (Input.GetKeyDown(nextKey) || Input.GetKeyDown(nextAltKey))
             {
                 MoveSelection(-1);
+                axisDirection = 0;
+                nextAxisMoveTime = Time.unscaledTime + axisRepeatDelay;
                 movedWithKey = true;
             }
 
@@ -422,6 +427,13 @@ public class PauseRadialTabMenu : MonoBehaviour
     private float ReadVerticalAxis()
     {
         if (string.IsNullOrEmpty(verticalAxis) || !verticalAxisAvailable)
+            return 0f;
+
+        if (suppressKeyboardAxisInput
+            && (Input.GetKey(previousKey)
+                || Input.GetKey(previousAltKey)
+                || Input.GetKey(nextKey)
+                || Input.GetKey(nextAltKey)))
             return 0f;
 
         try
