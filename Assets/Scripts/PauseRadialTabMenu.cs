@@ -25,9 +25,9 @@ public class PauseRadialTabMenu : MonoBehaviour
     public float sideRotationMultiplier = 0.22f;
 
     [Header("Focused Card")]
-    public Vector2 focusedPosition = new Vector2(-12f, 0f);
     public float focusedScale = 1.24f;
-    public float focusedRotationZ = 0f;
+    [Range(0f, 1f)] public float focusedAlpha = 1f;
+    [Range(0f, 1f)] public float unfocusedAlpha = 0.45f;
 
     [Header("Motion")]
     public float openSpeed = 7f;
@@ -74,6 +74,7 @@ public class PauseRadialTabMenu : MonoBehaviour
     private readonly List<Vector2> targetPositions = new List<Vector2>();
     private readonly List<float> targetRotations = new List<float>();
     private readonly List<float> targetScales = new List<float>();
+    private readonly List<CanvasGroup> cardCanvasGroups = new List<CanvasGroup>();
 
     private void Awake()
     {
@@ -154,6 +155,10 @@ public class PauseRadialTabMenu : MonoBehaviour
         for (int i = 0; i < cards.Count; i++)
         {
             Button button = cards[i].GetComponent<Button>();
+            CanvasGroup canvasGroup = cards[i].GetComponent<CanvasGroup>();
+            if (canvasGroup == null)
+                canvasGroup = cards[i].gameObject.AddComponent<CanvasGroup>();
+
             if (button != null)
             {
                 Navigation navigation = button.navigation;
@@ -163,7 +168,15 @@ public class PauseRadialTabMenu : MonoBehaviour
 
             if (i < buttons.Count && buttons[i] == null)
                 buttons[i] = button;
+
+            if (i >= cardCanvasGroups.Count)
+                cardCanvasGroups.Add(canvasGroup);
+            else
+                cardCanvasGroups[i] = canvasGroup;
         }
+
+        while (cardCanvasGroups.Count > cards.Count)
+            cardCanvasGroups.RemoveAt(cardCanvasGroups.Count - 1);
     }
 
     private void HandleSelectionInput()
@@ -331,14 +344,7 @@ public class PauseRadialTabMenu : MonoBehaviour
 
             Vector2 targetPosition = ringPosition;
             float targetRotation = ringRotation;
-            float targetScale = sideScale;
-
-            if (i == focusedIndex)
-            {
-                targetPosition = focusedPosition;
-                targetRotation = focusedRotationZ;
-                targetScale = focusedScale;
-            }
+            float targetScale = i == focusedIndex ? focusedScale : sideScale;
 
             targetPositions[i] = Vector2.Lerp(center, targetPosition, openAmount);
             targetRotations[i] = Mathf.Lerp(0f, targetRotation, openAmount);
@@ -390,6 +396,12 @@ public class PauseRadialTabMenu : MonoBehaviour
             ButtonHoverDottedOutline outline = cards[i].GetComponent<ButtonHoverDottedOutline>();
             if (outline != null)
                 outline.SetVisible(visible && openAmount > 0.8f && i == focusedIndex);
+
+            if (i < cardCanvasGroups.Count && cardCanvasGroups[i] != null)
+            {
+                float targetAlpha = i == focusedIndex ? focusedAlpha : unfocusedAlpha;
+                cardCanvasGroups[i].alpha = Mathf.Lerp(0f, targetAlpha, openAmount);
+            }
         }
     }
 

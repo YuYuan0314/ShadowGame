@@ -17767,6 +17767,7 @@ GameObject:
   m_Component:
   - component: {fileID: 964268401}
   - component: {fileID: 964268400}
+  - component: {fileID: 964268402}
   m_Layer: 0
   m_Name: PauseMenuSystem
   m_TagString: Untagged
@@ -17837,6 +17838,7 @@ MonoBehaviour:
   pauseFieldOfView: 40
   menuShowAtTransition: 0.62
   useScreenSpaceMenu: 1
+  anchorScreenMenuToPlayer: 0
   screenMenuAnchor: {x: 0.72, y: 0.52}
   screenMenuOffset: {x: 0, y: 0}
   screenMenuPadding: {x: 230, y: 190}
@@ -17864,6 +17866,81 @@ Transform:
   - {fileID: 479635300}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &964268402
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 964268399}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: df00973742c575248bdbabc198f58a28, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  player: {fileID: 2002530514}
+  controlledCamera: {fileID: 330585545}
+  cameraOrbit: {fileID: 2016178445}
+  worldCanvas: {fileID: 479635303}
+  tabMenu: {fileID: 1995191893}
+  continueButton: {fileID: 161948556}
+  musicButton: {fileID: 921411431}
+  exitButton: {fileID: 993082549}
+  musicPanel: {fileID: 1201264964}
+  musicSlider: {fileID: 1317564587}
+  musicValueText: {fileID: 763018232}
+  pauseKey: 27
+  gamepadPauseButton: 337
+  gamepadPauseAltButton: 339
+  backKey: 331
+  cancelButton: Cancel
+  horizontalAxis: Horizontal
+  horizontalAxisThreshold: 0.45
+  musicStep: 0.05
+  cameraTransitionDuration: 0.72
+  cameraTransitionCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 2.4
+      outSlope: 2.4
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 1
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  faceHeight: 0.32
+  faceForwardDistance: 1.55
+  faceSideOffset: 0.5
+  faceVerticalOffset: -0.04
+  pauseFieldOfView: 40
+  menuShowAtTransition: 0.62
+  useScreenSpaceMenu: 1
+  anchorScreenMenuToPlayer: 0
+  screenMenuAnchor: {x: 0.69, y: 0.47}
+  screenMenuOffset: {x: 0, y: 0}
+  screenMenuPadding: {x: 230, y: 190}
+  screenMenuFollowSpeed: 18
+  menuCanvasScale: 1
+  menuScreenRightOffset: 1.15
+  menuScreenUpOffset: 0.08
+  menuForwardOffset: -0.05
+  menuPoseFollowSpeed: 18
+  exitSceneName: Start
+  quitApplicationIfSceneMissing: 1
 --- !u!1001 &968492240
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -30523,9 +30600,9 @@ MonoBehaviour:
   angleStep: -70
   sideScale: 0.76
   sideRotationMultiplier: 0.12
-  focusedPosition: {x: 0, y: 0}
-  focusedScale: 1.1
-  focusedRotationZ: 0
+  focusedScale: 1.24
+  focusedAlpha: 1
+  unfocusedAlpha: 0.45
   openSpeed: 8
   moveSpeed: 16
   rotateSpeed: 16
@@ -30549,6 +30626,7 @@ MonoBehaviour:
   gamepadSubmitButton: 330
   verticalAxis: Vertical
   invertGamepadVerticalAxis: 1
+  suppressKeyboardAxisInput: 1
   submitButton: Submit
   axisThreshold: 0.55
   axisRepeatDelay: 0.3

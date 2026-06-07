@@ -58,6 +58,7 @@ public class PauseMenuController : MonoBehaviour
 
     [Header("World Menu Pose")]
     public bool useScreenSpaceMenu = true;
+    public bool anchorScreenMenuToPlayer = false;
     public Vector2 screenMenuAnchor = new Vector2(0.72f, 0.52f);
     public Vector2 screenMenuOffset = Vector2.zero;
     public Vector2 screenMenuPadding = new Vector2(230f, 190f);
@@ -491,9 +492,28 @@ public class PauseMenuController : MonoBehaviour
             size = new Vector2(Screen.width, Screen.height);
 
         Vector2 half = size * 0.5f;
-        Vector2 target = new Vector2(
-            Mathf.Lerp(-half.x, half.x, Mathf.Clamp01(screenMenuAnchor.x)),
-            Mathf.Lerp(-half.y, half.y, Mathf.Clamp01(screenMenuAnchor.y))) + screenMenuOffset;
+        Vector2 target;
+        if (anchorScreenMenuToPlayer && controlledCamera != null && player != null)
+        {
+            Vector3 screenPoint = controlledCamera.WorldToScreenPoint(GetFaceTarget());
+            if (screenPoint.z < 0f)
+            {
+                target = new Vector2(
+                    Mathf.Lerp(-half.x, half.x, Mathf.Clamp01(screenMenuAnchor.x)),
+                    Mathf.Lerp(-half.y, half.y, Mathf.Clamp01(screenMenuAnchor.y))) + screenMenuOffset;
+            }
+            else
+            {
+                RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, screenPoint, null, out Vector2 localPoint);
+                target = localPoint + screenMenuOffset;
+            }
+        }
+        else
+        {
+            target = new Vector2(
+                Mathf.Lerp(-half.x, half.x, Mathf.Clamp01(screenMenuAnchor.x)),
+                Mathf.Lerp(-half.y, half.y, Mathf.Clamp01(screenMenuAnchor.y))) + screenMenuOffset;
+        }
 
         Vector2 padding = new Vector2(
             Mathf.Min(screenMenuPadding.x, Mathf.Max(0f, half.x - 1f)),
