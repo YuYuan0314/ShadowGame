@@ -29,6 +29,8 @@ Material:
     - _ColorLevels: 7
     - _DitherStrength: 0.16
     - _EdgeStrength: 1.25
+    - _GridStrength: 0.18
+    - _GridWidth: 0.055
     - _PixelHeight: 120
     - _Saturation: 1.18
     - _Warmth: 0.12
