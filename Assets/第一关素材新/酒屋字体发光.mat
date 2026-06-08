@@ -21,7 +21,7 @@ Material:
   stringTagMap:
     RenderType: Opaque
   disabledShaderPasses: []
-  m_LockedProperties: 
+  m_LockedProperties: _BumpMap
   m_SavedProperties:
     serializedVersion: 3
     m_TexEnvs:
@@ -114,9 +114,9 @@ Material:
     - _WorkflowMode: 1
     - _ZWrite: 1
     m_Colors:
-    - _BaseColor: {r: 0.7607843, g: 0.5214919, b: 0.0980392, a: 1}
-    - _Color: {r: 0.7607843, g: 0.5214918, b: 0.09803919, a: 1}
-    - _EmissionColor: {r: 4.237094, g: 0.15339929, b: 0, a: 1}
+    - _BaseColor: {r: 0.23270428, g: 0.19853663, b: 0.17635763, a: 1}
+    - _Color: {r: 0.23270425, g: 0.1985366, b: 0.1763576, a: 1}
+    - _EmissionColor: {r: 0.42706254, g: 0.103780836, b: 0.03625996, a: 1}
     - _SpecColor: {r: 0.19999996, g: 0.19999996, b: 0.19999996, a: 1}
   m_BuildTextureStacks: []
 --- !u!114 &1160840476267543208
