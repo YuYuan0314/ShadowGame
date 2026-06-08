@@ -168,6 +168,11 @@ public class ShadowManager : MonoBehaviour
         }
 
         GameObject source = FindShadowSourceByRay(worldPoint);
+        if (source == null)
+        {
+            source = FindShadowSourceByProjectedBounds(worldPoint);
+        }
+
         if (source != null)
         {
             currentShadowSource = source;
@@ -185,6 +190,17 @@ public class ShadowManager : MonoBehaviour
         return GetProjectedShadowSource(worldPoint);
     }
 
+    public void ForceShadowSource(GameObject source)
+    {
+        currentShadowSource = source;
+
+        if (source != null)
+        {
+            IsPlayerInShadow = true;
+            HasDepthResult = true;
+        }
+    }
+
     public bool IsInProjectedArea(Vector3 worldPoint)
     {
         float pointDepth;
@@ -194,7 +210,7 @@ public class ShadowManager : MonoBehaviour
             return pointDepth > envDepth + depthBias;
         }
 
-        return FindShadowSourceByRay(worldPoint) != null;
+        return FindShadowSourceByRay(worldPoint) != null || FindShadowSourceByProjectedBounds(worldPoint) != null;
     }
 
     public bool IsNearProjectedArea(Vector3 worldPoint, float tolerance)
@@ -214,20 +230,43 @@ public class ShadowManager : MonoBehaviour
 
     public Vector3 GetSafePositionInShadow(GameObject caster)
     {
-        if (caster == null || receiveShadowObj == null || dirLight == null)
+        Vector3 position;
+        return TryGetSafePositionInShadow(caster, out position) ? position : Vector3.zero;
+    }
+
+    public bool TryGetSafePositionInShadow(GameObject caster, out Vector3 position)
+    {
+        position = Vector3.zero;
+        if (caster == null)
         {
-            return Vector3.zero;
+            return false;
         }
 
-        NPlane plane = GetReceivePlane(receiveShadowObj);
+        Light shadowLight = ResolveShadowLight();
+        if (shadowLight == null)
+        {
+            return false;
+        }
+
         Bounds bounds;
-        if (!TryGetRendererBounds(caster, out bounds))
+        Vector3 sourcePoint = TryGetRendererBounds(caster, out bounds) ? bounds.center : caster.transform.position;
+        Vector3 lightDir = shadowLight.transform.forward.normalized;
+
+        if (receiveShadowObj != null)
         {
-            return Vector3.zero;
+            NPlane plane = GetReceivePlane(receiveShadowObj);
+            position = ProjectPointToPlane(sourcePoint, plane.plane, lightDir);
+            return true;
         }
 
-        Vector3 lightDir = dirLight.transform.forward;
-        return ProjectPointToPlane(bounds.center, plane.plane, lightDir);
+        if (TryProjectPointToScene(caster, sourcePoint, lightDir, out position))
+        {
+            return true;
+        }
+
+        Plane fallbackPlane = new Plane(Vector3.up, player != null ? player.position : caster.transform.position);
+        position = ProjectPointToPlane(sourcePoint, fallbackPlane, lightDir);
+        return true;
     }
 
     public void RenderAndReadbackDepthMaps()
@@ -322,6 +361,11 @@ public class ShadowManager : MonoBehaviour
         if (IsPlayerInShadow && player != null)
         {
             GameObject source = FindShadowSourceByRay(player.position + Vector3.up * 0.05f);
+            if (source == null)
+            {
+                source = FindShadowSourceByProjectedBounds(player.position + Vector3.up * 0.05f);
+            }
+
             if (source != null)
             {
                 currentShadowSource = source;
@@ -548,6 +592,99 @@ public class ShadowManager : MonoBehaviour
         return null;
     }
 
+    private GameObject FindShadowSourceByProjectedBounds(Vector3 worldPoint)
+    {
+        if (dirLight == null || castShadowObjs == null || castShadowObjs.Count == 0)
+        {
+            return null;
+        }
+
+        Vector3 lightDir = dirLight.transform.forward.normalized;
+        Vector3 up = Mathf.Abs(Vector3.Dot(lightDir, Vector3.up)) > 0.98f ? Vector3.forward : Vector3.up;
+        Vector3 lightRight = Vector3.Cross(up, lightDir).normalized;
+        Vector3 lightUp = Vector3.Cross(lightDir, lightRight).normalized;
+
+        float pointRight = Vector3.Dot(worldPoint, lightRight);
+        float pointUp = Vector3.Dot(worldPoint, lightUp);
+        GameObject closestSource = null;
+        float closestDepth = float.PositiveInfinity;
+
+        for (int i = 0; i < castShadowObjs.Count; i++)
+        {
+            GameObject candidate = castShadowObjs[i];
+            if (candidate == null || !candidate.activeInHierarchy)
+            {
+                continue;
+            }
+
+            Bounds bounds;
+            if (!TryGetRendererBounds(candidate, out bounds))
+            {
+                continue;
+            }
+
+            float minRight;
+            float maxRight;
+            float minUp;
+            float maxUp;
+            float minDepth;
+            GetProjectedBoundsRange(bounds, lightRight, lightUp, lightDir, out minRight, out maxRight, out minUp, out maxUp, out minDepth);
+
+            if (pointRight < minRight || pointRight > maxRight || pointUp < minUp || pointUp > maxUp)
+            {
+                continue;
+            }
+
+            if (minDepth < closestDepth)
+            {
+                closestDepth = minDepth;
+                closestSource = candidate;
+            }
+        }
+
+        return closestSource;
+    }
+
+    private void GetProjectedBoundsRange(
+        Bounds bounds,
+        Vector3 lightRight,
+        Vector3 lightUp,
+        Vector3 lightDir,
+        out float minRight,
+        out float maxRight,
+        out float minUp,
+        out float maxUp,
+        out float minDepth)
+    {
+        Vector3 min = bounds.min;
+        Vector3 max = bounds.max;
+        minRight = float.PositiveInfinity;
+        maxRight = float.NegativeInfinity;
+        minUp = float.PositiveInfinity;
+        maxUp = float.NegativeInfinity;
+        minDepth = float.PositiveInfinity;
+
+        for (int x = 0; x < 2; x++)
+        {
+            for (int y = 0; y < 2; y++)
+            {
+                for (int z = 0; z < 2; z++)
+                {
+                    Vector3 corner = new Vector3(x == 0 ? min.x : max.x, y == 0 ? min.y : max.y, z == 0 ? min.z : max.z);
+                    float projectedRight = Vector3.Dot(corner, lightRight);
+                    float projectedUp = Vector3.Dot(corner, lightUp);
+                    float projectedDepth = Vector3.Dot(corner, lightDir);
+
+                    minRight = Mathf.Min(minRight, projectedRight);
+                    maxRight = Mathf.Max(maxRight, projectedRight);
+                    minUp = Mathf.Min(minUp, projectedUp);
+                    maxUp = Mathf.Max(maxUp, projectedUp);
+                    minDepth = Mathf.Min(minDepth, projectedDepth);
+                }
+            }
+        }
+    }
+
     private bool IsDrawableDepthRenderer(Renderer renderer)
     {
         if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy)
@@ -631,6 +768,61 @@ public class ShadowManager : MonoBehaviour
 
         float t = -plane.GetDistanceToPoint(point) / dot;
         return point + direction * t;
+    }
+
+    private Light ResolveShadowLight()
+    {
+        if (dirLight != null)
+        {
+            return dirLight;
+        }
+
+        if (RenderSettings.sun != null && RenderSettings.sun.type == LightType.Directional)
+        {
+            return RenderSettings.sun;
+        }
+
+        Light[] lights = FindObjectsOfType<Light>();
+        for (int i = 0; i < lights.Length; i++)
+        {
+            if (lights[i] != null && lights[i].type == LightType.Directional && lights[i].enabled)
+            {
+                return lights[i];
+            }
+        }
+
+        return null;
+    }
+
+    private bool TryProjectPointToScene(GameObject caster, Vector3 sourcePoint, Vector3 lightDir, out Vector3 position)
+    {
+        position = Vector3.zero;
+        float rayDistance = Mathf.Max(farPlane, lightCameraDistance * 2f, 100f);
+        Vector3 rayStart = sourcePoint - lightDir * 0.05f;
+        RaycastHit[] hits = Physics.RaycastAll(rayStart, lightDir, rayDistance, ~0, QueryTriggerInteraction.Ignore);
+        if (hits == null || hits.Length == 0)
+        {
+            return false;
+        }
+
+        System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+        for (int i = 0; i < hits.Length; i++)
+        {
+            if (hits[i].collider == null)
+            {
+                continue;
+            }
+
+            if (caster != null && hits[i].transform.IsChildOf(caster.transform))
+            {
+                continue;
+            }
+
+            position = hits[i].point;
+            return true;
+        }
+
+        return false;
     }
 
     private bool TryGetRendererBounds(GameObject obj, out Bounds bounds)

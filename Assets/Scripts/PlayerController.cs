@@ -46,6 +46,10 @@ public class PlayerRbController : MonoBehaviour
     [Header("Outside Shadow Movement")]
     [Range(0f, 1f)] public float outsideShadowMoveMultiplier = 0.1f;
 
+    [Header("Moving Shadow")]
+    [Tooltip("If enabled, the player inherits velocity from the object casting the current shadow.")]
+    public bool followMovingShadowSource = false;
+
     [Header("Runtime State")]
     public float currentLightTimer = 0f;
 
@@ -79,8 +83,10 @@ public class PlayerRbController : MonoBehaviour
     private bool jumpedThisFlight;
     private int outOfShadowFrames;
     private int groundedFrames;
+    private GameObject pendingResetShadowSource;
+    private Vector3 pendingResetTargetPosition;
 
-    // 骞冲彴閫熷害杩借釜锛氶伩鍏?MovePosition 瀵艰嚧鐨勬娊鎼?
+    // Moving shadow velocity. Disabled by default so shadows do not carry the player.
     private Vector3 lastPlatformVelocity;
 
     // 钃勫姏璺宠穬
@@ -342,6 +348,8 @@ public class PlayerRbController : MonoBehaviour
         jumpForceRemainingVelocity = 0f;
         rb.velocity = Vector3.zero;
         currentLightTimer = 0f;
+        pendingResetShadowSource = null;
+        pendingResetTargetPosition = Vector3.zero;
 
         Vector3 targetPos = DetermineResetTarget();
         float dist = Vector3.Distance(transform.position, targetPos);
@@ -363,23 +371,25 @@ public class PlayerRbController : MonoBehaviour
 
     private Vector3 DetermineResetTarget()
     {
-        // 浼樺厛锛氫紶閫佸埌 fallback 鐗╀綋鎶曞奖闃村奖鐨勯噸蹇冿紙淇濊瘉鍦ㄩ槾褰辨涓ぎ锛?
+        // Prefer the configured fallback shadow for moving shadow casters.
         if (lastActiveShadowSource != null)
         {
-            var mover = lastActiveShadowSource.GetComponent<IShadowMover>();
+            var mover = FindShadowMover(lastActiveShadowSource);
             GameObject fallback = (mover != null) ? mover.GetFallbackTarget() : null;
 
-            if (fallback != null && fallback.activeInHierarchy && shadowManager != null)
+            if (fallback != null && fallback.activeInHierarchy)
             {
-                Vector3 safePos = shadowManager.GetSafePositionInShadow(fallback);
-                if (safePos != Vector3.zero)
-                    return safePos + shadowOffset;
+                pendingResetShadowSource = fallback;
+                pendingResetTargetPosition = fallback.transform.position;
+                return pendingResetTargetPosition;
             }
         }
 
         // 鍏舵锛氳繑鍥炰笂娆″瓨妗ｇ殑鏈湴瀹夊叏鍧愭爣
         if (hasSafePos && lastActiveShadowSource != null)
+        {
             return lastActiveShadowSource.transform.TransformPoint(lastLocalSafePos) + shadowOffset;
+        }
 
         // 鍏滃簳
         return transform.position + Vector3.up * 2f;
@@ -390,23 +400,37 @@ public class PlayerRbController : MonoBehaviour
         isResetting = false;
         resetGraceTimer = resetGracePeriod;
 
-        // 鍏堟娴嬪綋鍓嶅疄闄呮墍鍦ㄧ殑 shadow source锛屽垽鏂洖寮瑰埌鐨勬槸 fallback 杩樻槸鍘熷钩鍙?
-        Vector3 checkPoint = transform.position + Vector3.up * 0.05f;
-        GameObject actualSource = shadowManager != null ? shadowManager.GetProjectedShadowSource(checkPoint) : null;
-        bool switchedSource = actualSource != null && actualSource != lastActiveShadowSource;
-
-        if (switchedSource)
+        if (pendingResetShadowSource != null)
         {
-            // 鍥炲脊鍒颁簡 fallback 鐩爣 鈫?鍒囨崲璺熻釜婧愶紝涓嶇浣嶇疆
-            lastActiveShadowSource = actualSource;
-            hasSafePos = false;
-            lastLocalSafePos = Vector3.zero;
+            transform.position = pendingResetTargetPosition;
+            lastActiveShadowSource = pendingResetShadowSource;
+            lastLocalSafePos = lastActiveShadowSource.transform.InverseTransformPoint(pendingResetTargetPosition);
+            hasSafePos = true;
+            if (shadowManager != null)
+                shadowManager.ForceShadowSource(lastActiveShadowSource);
+            pendingResetShadowSource = null;
+            pendingResetTargetPosition = Vector3.zero;
         }
-        else if (hasSafePos && lastActiveShadowSource != null)
+        else
         {
-            // 鍥炲脊鍥炲師绉诲姩骞冲彴 鈫?鐢ㄥ钩鍙板綋鍓嶄綅缃噸绠楋紝寮ヨˉ DOTween 鏈熼棿骞冲彴鐨勪綅绉?
-            Vector3 currentSafePos = lastActiveShadowSource.transform.TransformPoint(lastLocalSafePos) + shadowOffset;
-            transform.position = currentSafePos;
+            // 鍏堟娴嬪綋鍓嶅疄闄呮墍鍦ㄧ殑 shadow source锛屽垽鏂洖寮瑰埌鐨勬槸 fallback 杩樻槸鍘熷钩鍙?
+            Vector3 checkPoint = transform.position + Vector3.up * 0.05f;
+            GameObject actualSource = shadowManager != null ? shadowManager.GetProjectedShadowSource(checkPoint) : null;
+            bool switchedSource = actualSource != null && actualSource != lastActiveShadowSource;
+
+            if (switchedSource)
+            {
+                // 鍥炲脊鍒颁簡 fallback 鐩爣 鈫?鍒囨崲璺熻釜婧愶紝涓嶇浣嶇疆
+                lastActiveShadowSource = actualSource;
+                hasSafePos = false;
+                lastLocalSafePos = Vector3.zero;
+            }
+            else if (hasSafePos && lastActiveShadowSource != null)
+            {
+                // 鍥炲脊鍥炲師绉诲姩骞冲彴 鈫?鐢ㄥ钩鍙板綋鍓嶄綅缃噸绠楋紝寮ヨˉ DOTween 鏈熼棿骞冲彴鐨勪綅绉?
+                Vector3 currentSafePos = lastActiveShadowSource.transform.TransformPoint(lastLocalSafePos) + shadowOffset;
+                transform.position = currentSafePos;
+            }
         }
 
         // 鍚屾 Rigidbody 浣嶇疆涓庨€熷害娓呴浂
@@ -514,10 +538,10 @@ public class PlayerRbController : MonoBehaviour
         Vector3 moveDir = (camForward * v + camRight * h).normalized;
         float activeMoveMultiplier = 1f;
 
-        // === 骞冲彴閫熷害杩借釜锛堢敤閫熷害鏇夸唬 MovePosition锛岄伩鍏嶆娊鎼愶級 ===
+        // === Moving shadow source velocity ===
         Vector3 platformVelocity = Vector3.zero;
         Vector3 platformDisplacement = Vector3.zero;
-        if (isGrounded && wasInShadowLastFrame && lastActiveShadowSource != null)
+        if (followMovingShadowSource && isGrounded && wasInShadowLastFrame && lastActiveShadowSource != null)
         {
             Vector3 currentSrcPos = lastActiveShadowSource.transform.position;
             Vector3 displacement = currentSrcPos - lastSourcePos;
@@ -534,7 +558,7 @@ public class PlayerRbController : MonoBehaviour
             lastSourcePos = lastActiveShadowSource.transform.position;
         }
 
-        if (isChargingJump && platformDisplacement.sqrMagnitude > 0.0000001f)
+        if (followMovingShadowSource && isChargingJump && platformDisplacement.sqrMagnitude > 0.0000001f)
         {
             rb.MovePosition(rb.position + platformDisplacement);
             platformVelocity = Vector3.zero;
@@ -555,7 +579,7 @@ public class PlayerRbController : MonoBehaviour
                 bool outsideShadow = exposedBySpotlight || (shadowManager != null && !shadowManager.IsPlayerInShadow && !shadowManager.IsInProjectedArea(nextPos));
                 activeMoveMultiplier = outsideShadow ? outsideShadowMoveMultiplier : 1f;
 
-                // Target velocity = platform velocity + player input velocity. Outside shadow only reduces input speed.
+                // Target velocity = optional moving shadow velocity + player input velocity.
                 Vector3 targetVel = platformVelocity + moveDir * (moveSpeed * activeMoveMultiplier);
                 Vector3 currentHoriz = new Vector3(rb.velocity.x, 0, rb.velocity.z);
                 Vector3 desiredHoriz = new Vector3(targetVel.x, 0, targetVel.z);
@@ -563,7 +587,7 @@ public class PlayerRbController : MonoBehaviour
             }
             else
             {
-                // 鏃犺緭鍏ワ細璺熼殢骞冲彴閫熷害
+                // No input: only follow the moving shadow source when explicitly enabled.
                 rb.velocity = new Vector3(platformVelocity.x, rb.velocity.y, platformVelocity.z);
             }
         }
@@ -624,7 +648,7 @@ public class PlayerRbController : MonoBehaviour
         if (lastActiveShadowSource == null)
             return false;
 
-        if (lastActiveShadowSource.GetComponent<IShadowMover>() != null)
+        if (FindShadowMover(lastActiveShadowSource) != null)
             return true;
 
         MonoBehaviour[] behaviours = lastActiveShadowSource.GetComponentsInParent<MonoBehaviour>();
@@ -643,6 +667,18 @@ public class PlayerRbController : MonoBehaviour
             return;
 
         shadowManager = FindObjectOfType<ShadowManager>();
+    }
+
+    private IShadowMover FindShadowMover(GameObject source)
+    {
+        if (source == null)
+            return null;
+
+        IShadowMover mover = source.GetComponent<IShadowMover>();
+        if (mover != null)
+            return mover;
+
+        return source.GetComponentInParent<IShadowMover>();
     }
 
     private void StopChargeEffects()
