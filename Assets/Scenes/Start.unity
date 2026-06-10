@@ -285,7 +285,7 @@ RectTransform:
   m_GameObject: {fileID: 64487144}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1.84, y: 1.84, z: 1.84}
+  m_LocalScale: {x: 2.2, y: 2.2, z: 2.2}
   m_ConstrainProportionsScale: 1
   m_Children:
   - {fileID: 2055246649}
@@ -360,7 +360,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: -488613554, guid: 209da09aa0856e1489e2c7ea14f774c8, type: 3}
+  m_Sprite: {fileID: -1330803184, guid: 6d8d5eb88d2d9fb46b6f6ade3b046fd8, type: 3}
   m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
@@ -1899,7 +1899,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 21300000, guid: 569de75d1ab515f47b5247f5a3f51b02, type: 3}
+  m_Sprite: {fileID: 522978622, guid: 73f54135fb209584ea5c14041262b1f9, type: 3}
   m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
@@ -2390,7 +2390,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 963577955, guid: a12172bf4305c1848ae64434e35dfb33, type: 3}
+  m_Sprite: {fileID: -255389054, guid: d7c10c500cd43db4b9dbd52c2ddb6f79, type: 3}
   m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
@@ -3249,7 +3249,7 @@ RectTransform:
   m_GameObject: {fileID: 1464356394}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1.7, y: 1.7, z: 1.7}
+  m_LocalScale: {x: 1.9099998, y: 1.9099998, z: 1.9099998}
   m_ConstrainProportionsScale: 1
   m_Children:
   - {fileID: 9555948}
@@ -3324,8 +3324,8 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 1583973590, guid: d31c4857aa860114382fa34c81e4507d, type: 3}
-  m_Type: 1
+  m_Sprite: {fileID: -312706194, guid: 3fe00446fe6fae445be86bcf16067122, type: 3}
+  m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
   m_FillMethod: 4
@@ -3467,7 +3467,7 @@ MonoBehaviour:
     titleText: {fileID: 151863181}
     subtitleText: {fileID: 1211089182}
     levelName: "\u7B2C\u4E00\u5173"
-    sceneName: "\u7B2C\u4E00\u5173"
+    sceneName: Level1
   - card: {fileID: 2014915245}
     button: {fileID: 2014915241}
     previewImage: {fileID: 385669012}
