@@ -8,7 +8,8 @@ public class move : MonoBehaviour, IShadowMover
     {
         Stop,
         Loop,
-        PingPong
+        PingPong,
+        OnceAgain
     }
 
     [Serializable]
@@ -100,6 +101,13 @@ public class move : MonoBehaviour, IShadowMover
         if (Vector3.Distance(transform.position, targetPosition) <= 0.001f)
         {
             currentIndex = targetIndex;
+
+            if (endMode == EndMode.OnceAgain && currentIndex >= nodes.Count - 1)
+            {
+                ResetToFirstNodeForOnceAgain();
+                return;
+            }
+
             waitTimer = nodes[currentIndex].waitTime;
         }
     }
@@ -156,6 +164,9 @@ public class move : MonoBehaviour, IShadowMover
                 nextIndex = currentIndex + direction;
                 return nextIndex >= 0 && nextIndex < nodes.Count ? nextIndex : -1;
 
+            case EndMode.OnceAgain:
+                return -1;
+
             default:
                 return -1;
         }
@@ -184,9 +195,47 @@ public class move : MonoBehaviour, IShadowMover
                 nextIndex = index - direction;
                 return nextIndex >= 0 && nextIndex < nodes.Count ? nextIndex : -1;
 
+            case EndMode.OnceAgain:
+                return -1;
+
             default:
                 return -1;
         }
+    }
+
+    private void ResetToFirstNodeForOnceAgain()
+    {
+        if (nodes.Count == 0 || nodes[0].point == null)
+        {
+            isMoving = false;
+            return;
+        }
+
+        transform.position = nodes[0].point.position;
+        currentIndex = 0;
+        direction = 1;
+        waitTimer = 0f;
+
+        int nextIndex = GetNextIndex();
+        if (faceMoveDirection && nextIndex >= 0 && nodes[nextIndex].point != null)
+        {
+            SnapRotationTowards(nodes[nextIndex].point.position - transform.position);
+        }
+    }
+
+    private void SnapRotationTowards(Vector3 faceDirection)
+    {
+        if (keepUpright)
+        {
+            faceDirection = Vector3.ProjectOnPlane(faceDirection, Vector3.up);
+        }
+
+        if (faceDirection.sqrMagnitude <= 0.0001f)
+        {
+            return;
+        }
+
+        transform.rotation = Quaternion.LookRotation(faceDirection.normalized, Vector3.up) * Quaternion.Euler(0f, yawOffset, 0f);
     }
 
     private void RotateTowardsPath(int targetIndex, Vector3 targetPosition)

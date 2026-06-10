@@ -50,6 +50,7 @@ public class CameraOrbit : MonoBehaviour
     public float occlusionMinHeight = 3f;
     public float occlusionSmoothSpeed = 6f;
     public float cameraRadius = 0.3f;
+    public bool keepPulledInDistance = true;
 
     [HideInInspector] public Vector3 shakeOffset;
 
@@ -158,6 +159,12 @@ public class CameraOrbit : MonoBehaviour
                     float blockedRatio = 1f - (hit.distance / toCamDist);
                     occludedHeight = Mathf.Lerp(targetHeight, occlusionMinHeight, blockedRatio);
                     desiredDistance = Mathf.Lerp(targetDistance, Mathf.Max(minDistance, hit.distance - cameraRadius), blockedRatio);
+
+                    if (keepPulledInDistance && desiredDistance < targetDistance)
+                    {
+                        targetDistance = Mathf.Clamp(desiredDistance, minDistance, maxDistance);
+                        distance = targetDistance;
+                    }
                 }
             }
         }
