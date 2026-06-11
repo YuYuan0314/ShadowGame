@@ -27,6 +27,8 @@ public class CinematicCameraPath : MonoBehaviour
     [Tooltip("0 snaps to each computed look direction. 1 follows it directly. Values between 0 and 1 ease toward it.")]
     [Range(0f, 1f)]
     public float lookSmoothness = 1f;
+    [Tooltip("Keeps the cinematic camera horizon level instead of inheriting a tilted player camera roll.")]
+    public bool keepHorizonLevel = true;
 
     [Header("Finish")]
     [Tooltip("How long to hold on the final point, in seconds.")]
@@ -78,9 +80,11 @@ public class CinematicCameraPath : MonoBehaviour
         cameraOrbit = camTransform.GetComponentInParent<CameraOrbit>();
 
         camOriginalWorldPos = camTransform.position;
-        camOriginalWorldRot = camTransform.rotation;
+        camOriginalWorldRot = keepHorizonLevel ? GetLevelRotation(camTransform.forward, camTransform.rotation) : camTransform.rotation;
         camOriginalLocalPos = camTransform.localPosition;
-        camOriginalLocalRot = camTransform.localRotation;
+        camOriginalLocalRot = keepHorizonLevel && camTransform.parent != null
+            ? Quaternion.Inverse(camTransform.parent.rotation) * camOriginalWorldRot
+            : camTransform.localRotation;
 
         playerRb.velocity = Vector3.zero;
         playerRb.angularVelocity = Vector3.zero;
@@ -103,11 +107,19 @@ public class CinematicCameraPath : MonoBehaviour
         switch (lookMode)
         {
             case LookMode.AlongPath:
-                pathTween.SetLookAt(lookAhead);
+                if (keepHorizonLevel)
+                    pathTween.OnUpdate(UpdateAlongPathLook);
+                else
+                    pathTween.SetLookAt(lookAhead);
                 break;
             case LookMode.Target:
                 if (lookAtTarget != null)
-                    pathTween.SetLookAt(lookAtTarget);
+                {
+                    if (keepHorizonLevel)
+                        pathTween.OnUpdate(UpdateTargetLook);
+                    else
+                        pathTween.SetLookAt(lookAtTarget);
+                }
                 break;
             case LookMode.WaypointTargets:
                 pathTween.OnUpdate(UpdateWaypointTargetLook);
@@ -122,20 +134,72 @@ public class CinematicCameraPath : MonoBehaviour
         sequence.OnComplete(RestoreControl);
     }
 
+    void UpdateAlongPathLook()
+    {
+        if (camTransform == null || waypoints == null || waypoints.Length == 0)
+            return;
+
+        Vector3 lookPosition = GetAlongPathLookPosition(activePathTween != null ? activePathTween.ElapsedPercentage(false) : 0f);
+        ApplyLevelLook(lookPosition - camTransform.position);
+    }
+
+    void UpdateTargetLook()
+    {
+        if (camTransform == null || lookAtTarget == null)
+            return;
+
+        ApplyLevelLook(lookAtTarget.position - camTransform.position);
+    }
+
     void UpdateWaypointTargetLook()
     {
         if (camTransform == null || waypoints == null || waypoints.Length == 0 || lookAtPoints == null || lookAtPoints.Length == 0)
             return;
 
         Vector3 lookPosition = GetInterpolatedLookPosition(activePathTween != null ? activePathTween.ElapsedPercentage(false) : 0f);
-        Vector3 lookDirection = lookPosition - camTransform.position;
+        ApplyLevelLook(lookPosition - camTransform.position);
+    }
+
+    void ApplyLevelLook(Vector3 lookDirection)
+    {
         if (lookDirection.sqrMagnitude < 0.0001f)
             return;
 
-        Quaternion targetRotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
+        Quaternion targetRotation = keepHorizonLevel
+            ? GetLevelRotation(lookDirection, camTransform.rotation)
+            : Quaternion.LookRotation(lookDirection.normalized, camTransform.up);
+
         camTransform.rotation = lookSmoothness <= 0f
             ? targetRotation
             : Quaternion.Slerp(camTransform.rotation, targetRotation, lookSmoothness);
+    }
+
+    Quaternion GetLevelRotation(Vector3 lookDirection, Quaternion fallbackRotation)
+    {
+        Vector3 flatForward = Vector3.ProjectOnPlane(lookDirection, Vector3.up);
+        if (flatForward.sqrMagnitude < 0.0001f)
+        {
+            flatForward = Vector3.ProjectOnPlane(fallbackRotation * Vector3.forward, Vector3.up);
+        }
+
+        if (flatForward.sqrMagnitude < 0.0001f)
+        {
+            flatForward = Vector3.forward;
+        }
+
+        return Quaternion.LookRotation(flatForward.normalized, Vector3.up);
+    }
+
+    Vector3 GetAlongPathLookPosition(float normalizedTime)
+    {
+        if (waypoints == null || waypoints.Length == 0)
+            return camTransform.position + camTransform.forward;
+
+        int index = Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(normalizedTime + lookAhead) * (waypoints.Length - 1)), 0, waypoints.Length - 1);
+        if (waypoints[index] != null)
+            return waypoints[index].position;
+
+        return camTransform.position + camTransform.forward;
     }
 
     Vector3 GetInterpolatedLookPosition(float normalizedTime)
