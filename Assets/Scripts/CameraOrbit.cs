@@ -45,12 +45,13 @@ public class CameraOrbit : MonoBehaviour
     public string fallbackGamepadLookXAxis = "CameraLookXAlt";
     public string fallbackGamepadLookYAxis = "CameraLookYAlt";
 
-    [Header("Occlusion Auto-Pull")]
-    public LayerMask occlusionLayer = ~0;
-    public float occlusionMinHeight = 3f;
-    public float occlusionSmoothSpeed = 6f;
-    public float cameraRadius = 0.3f;
-    public bool keepPulledInDistance = true;
+    [Header("Vertical Lock")]
+    public bool lockVerticalView = true;
+    public float lockedCameraHeight = 8f;
+
+    [Header("Zoom View Angle")]
+    public bool keepViewAngleWhenZooming = true;
+    public float viewAngleReferenceDistance = 0f;
 
     [HideInInspector] public Vector3 shakeOffset;
 
@@ -59,15 +60,17 @@ public class CameraOrbit : MonoBehaviour
     private float currentHeight;
     private float targetDistance;
     private float currentDistance;
+    private float runtimeViewAngleReferenceDistance;
     private Transform camTransform;
 
     void Start()
     {
         camTransform = Camera.main != null ? Camera.main.transform : null;
         targetYRotation = transform.eulerAngles.y;
-        targetHeight = Mathf.Clamp(height, minCameraHeight, maxCameraHeight);
-        currentHeight = targetHeight;
         targetDistance = Mathf.Clamp(distance, minDistance, maxDistance);
+        runtimeViewAngleReferenceDistance = viewAngleReferenceDistance > 0f ? viewAngleReferenceDistance : targetDistance;
+        targetHeight = GetConfiguredHeight(targetDistance);
+        currentHeight = targetHeight;
         currentDistance = targetDistance;
         UpdateCameraOffset();
     }
@@ -107,11 +110,13 @@ public class CameraOrbit : MonoBehaviour
         targetYRotation += mouseX * mouseYawSensitivity;
         targetYRotation += stickX * stickYawSpeed * Time.deltaTime;
 
-        float heightDirection = invertHeightInput ? 1f : -1f;
-        targetHeight += mouseY * mouseHeightSensitivity * heightDirection;
-        targetHeight += stickY * stickHeightSpeed * heightDirection * Time.deltaTime;
-        targetHeight = Mathf.Clamp(targetHeight, minCameraHeight, maxCameraHeight);
-        height = targetHeight;
+        if (!lockVerticalView)
+        {
+            float heightDirection = invertHeightInput ? 1f : -1f;
+            targetHeight += mouseY * mouseHeightSensitivity * heightDirection;
+            targetHeight += stickY * stickHeightSpeed * heightDirection * Time.deltaTime;
+            targetHeight = Mathf.Clamp(targetHeight, minCameraHeight, maxCameraHeight);
+        }
 
         float distanceDelta = 0f;
 
@@ -133,46 +138,46 @@ public class CameraOrbit : MonoBehaviour
             targetDistance = Mathf.Clamp(targetDistance + distanceDelta, minDistance, maxDistance);
             distance = targetDistance;
         }
+
+        if (lockVerticalView)
+        {
+            targetHeight = GetConfiguredHeight(targetDistance);
+        }
+
+        height = targetHeight;
     }
 
     void UpdateCameraOffset()
     {
         if (camTransform == null) return;
 
-        float occludedHeight = targetHeight;
         float desiredDistance = targetDistance;
+        float desiredHeight = lockVerticalView ? GetConfiguredHeight(desiredDistance) : targetHeight;
+        currentHeight = Mathf.Lerp(currentHeight, desiredHeight, Time.deltaTime * heightSmoothSpeed);
 
-        if (player != null)
-        {
-            Vector3 playerHead = player.position + Vector3.up * lookOffset;
-            Vector3 pivotPos = transform.position;
-            Vector3 desiredCamPos = pivotPos + transform.rotation * new Vector3(0f, targetHeight, -desiredDistance);
-
-            Vector3 toCam = desiredCamPos - playerHead;
-            float toCamDist = toCam.magnitude;
-            if (toCamDist > 0.01f)
-            {
-                Vector3 toCamDir = toCam / toCamDist;
-
-                if (Physics.SphereCast(playerHead, cameraRadius, toCamDir, out RaycastHit hit, toCamDist, occlusionLayer))
-                {
-                    float blockedRatio = 1f - (hit.distance / toCamDist);
-                    occludedHeight = Mathf.Lerp(targetHeight, occlusionMinHeight, blockedRatio);
-                    desiredDistance = Mathf.Lerp(targetDistance, Mathf.Max(minDistance, hit.distance - cameraRadius), blockedRatio);
-
-                    if (keepPulledInDistance && desiredDistance < targetDistance)
-                    {
-                        targetDistance = Mathf.Clamp(desiredDistance, minDistance, maxDistance);
-                        distance = targetDistance;
-                    }
-                }
-            }
-        }
-
-        currentHeight = Mathf.Lerp(currentHeight, occludedHeight, Time.deltaTime * Mathf.Max(heightSmoothSpeed, occlusionSmoothSpeed));
         currentDistance = Mathf.Lerp(currentDistance, desiredDistance, Time.deltaTime * distanceSmoothSpeed);
 
         camTransform.localPosition = new Vector3(0f, currentHeight, -currentDistance) + shakeOffset;
+    }
+
+    float GetConfiguredHeight()
+    {
+        return GetConfiguredHeight(targetDistance);
+    }
+
+    float GetConfiguredHeight(float forDistance)
+    {
+        float configuredHeight = lockVerticalView ? lockedCameraHeight : height;
+
+        if (lockVerticalView && keepViewAngleWhenZooming)
+        {
+            float referenceDistance = Mathf.Max(runtimeViewAngleReferenceDistance, 0.01f);
+            float heightAboveLookTarget = Mathf.Max(lockedCameraHeight - lookOffset, 0.01f);
+            configuredHeight = lookOffset + heightAboveLookTarget * (Mathf.Max(forDistance, 0.01f) / referenceDistance);
+            return Mathf.Max(configuredHeight, minCameraHeight);
+        }
+
+        return Mathf.Clamp(configuredHeight, minCameraHeight, maxCameraHeight);
     }
 
     float GetAxisSafe(string axisName)
