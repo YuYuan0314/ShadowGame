@@ -12,6 +12,7 @@ public class FloatingDustEffect : MonoBehaviour
 
     [Header("Movement")]
     [SerializeField, Range(0.01f, 0.5f)] float floatSpeed = 0.1f;
+    [SerializeField] bool verticalUpOnly = true;
     [SerializeField, Range(0, 0.1f)] float driftAmount = 0.03f;
 
     [Header("Spawn Area")]
@@ -73,7 +74,7 @@ public class FloatingDustEffect : MonoBehaviour
 
         var main = _ps.main;
         main.startLifetime = lifetime;
-        main.startSpeed = floatSpeed;
+        main.startSpeed = verticalUpOnly ? 0f : floatSpeed;
         main.startSize = size;
         main.maxParticles = maxParticles;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
@@ -113,12 +114,13 @@ public class FloatingDustEffect : MonoBehaviour
 
         var velocity = _ps.velocityOverLifetime;
         velocity.enabled = true;
-        velocity.x = new ParticleSystem.MinMaxCurve(-driftAmount, driftAmount);
-        velocity.y = new ParticleSystem.MinMaxCurve(driftAmount * 0.5f, driftAmount * 2f);
-        velocity.z = new ParticleSystem.MinMaxCurve(-driftAmount * 0.5f, driftAmount * 0.5f);
+        velocity.space = ParticleSystemSimulationSpace.World;
+        velocity.x = verticalUpOnly ? new ParticleSystem.MinMaxCurve(0f) : new ParticleSystem.MinMaxCurve(-driftAmount, driftAmount);
+        velocity.y = verticalUpOnly ? new ParticleSystem.MinMaxCurve(floatSpeed) : new ParticleSystem.MinMaxCurve(driftAmount * 0.5f, driftAmount * 2f);
+        velocity.z = verticalUpOnly ? new ParticleSystem.MinMaxCurve(0f) : new ParticleSystem.MinMaxCurve(-driftAmount * 0.5f, driftAmount * 0.5f);
 
         var noise = _ps.noise;
-        noise.enabled = true;
+        noise.enabled = !verticalUpOnly;
         noise.strength = new ParticleSystem.MinMaxCurve(floatSpeed * 0.5f);
         noise.frequency = 0.3f;
         noise.scrollSpeed = 0.1f;
