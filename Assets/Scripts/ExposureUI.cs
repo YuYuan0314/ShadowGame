@@ -7,8 +7,23 @@ public class ExposureUI : MonoBehaviour
 
     [Header("References")]
     public PlayerRbController player;
+    public Image backgroundImage;
     public Image fillImage;
+    public Image frameImage;
     public Image screenFlashImage;
+
+    [Header("Bar Sprites")]
+    public Sprite barFillSprite;
+    public Sprite barBackgroundSprite;
+    public Sprite barFrameSprite;
+    public bool tintFillByExposure;
+
+    [Header("Bar Layout")]
+    public Vector2 barAnchor = new Vector2(0f, 1f);
+    public Vector2 barPosition = new Vector2(230f, -80f);
+    public Vector2 barSize = new Vector2(384f, 48f);
+    public Vector2 framePositionOffset = Vector2.zero;
+    public Vector2 frameSizeExtra = Vector2.zero;
 
     [Header("Bar Colors")]
     public Color safeColor = new Color(0.2f, 0.85f, 0.25f);
@@ -22,7 +37,8 @@ public class ExposureUI : MonoBehaviour
 
     private Canvas canvas;
     private float smoothFill = 1f;
-    private RectTransform fillRect;
+    private RectTransform barRect;
+    private RectTransform frameRect;
 
     private void Awake()
     {
@@ -30,6 +46,13 @@ public class ExposureUI : MonoBehaviour
             player = FindObjectOfType<PlayerRbController>();
 
         CreateCanvasIfNeeded();
+    }
+
+    private void OnValidate()
+    {
+        ApplyBarSprites();
+        ConfigureFillImage();
+        ApplyBarLayout();
     }
 
     private void OnEnable()
@@ -66,8 +89,13 @@ public class ExposureUI : MonoBehaviour
 
         if (fillImage == null)
             CreateExposureBar();
-        else if (fillRect == null)
-            fillRect = fillImage.GetComponent<RectTransform>();
+        else
+        {
+            ResolveBarRects();
+            ConfigureFillImage();
+            ApplyBarSprites();
+            ApplyBarLayout();
+        }
 
         if (screenFlashImage == null)
             CreateScreenFlash();
@@ -77,16 +105,13 @@ public class ExposureUI : MonoBehaviour
     {
         GameObject barGO = new GameObject("ExposureBar", typeof(RectTransform));
         barGO.transform.SetParent(canvas.transform, false);
-        RectTransform barRT = barGO.GetComponent<RectTransform>();
-        barRT.anchorMin = new Vector2(0.02f, 0.90f);
-        barRT.anchorMax = new Vector2(0.22f, 0.94f);
-        barRT.offsetMin = Vector2.zero;
-        barRT.offsetMax = Vector2.zero;
+        barRect = barGO.GetComponent<RectTransform>();
 
         GameObject bgGO = new GameObject("Background", typeof(Image));
         bgGO.transform.SetParent(barGO.transform, false);
-        Image bgImg = bgGO.GetComponent<Image>();
-        bgImg.color = new Color(0f, 0f, 0f, 0.6f);
+        backgroundImage = bgGO.GetComponent<Image>();
+        backgroundImage.color = barBackgroundSprite != null ? Color.white : new Color(0f, 0f, 0f, 0.6f);
+        backgroundImage.raycastTarget = false;
         RectTransform bgRT = bgGO.GetComponent<RectTransform>();
         bgRT.anchorMin = Vector2.zero;
         bgRT.anchorMax = Vector2.one;
@@ -96,27 +121,86 @@ public class ExposureUI : MonoBehaviour
         GameObject fillGO = new GameObject("Fill", typeof(Image));
         fillGO.transform.SetParent(barGO.transform, false);
         fillImage = fillGO.GetComponent<Image>();
-        fillImage.raycastTarget = false;
-        fillRect = fillGO.GetComponent<RectTransform>();
+        RectTransform fillRect = fillGO.GetComponent<RectTransform>();
         fillRect.anchorMin = new Vector2(0, 0);
         fillRect.anchorMax = new Vector2(1, 1);
-        fillRect.pivot = new Vector2(0, 0.5f);
         fillRect.offsetMin = new Vector2(4, 4);
         fillRect.offsetMax = new Vector2(-4, -4);
 
-        GameObject labelGO = new GameObject("Label", typeof(Text));
-        labelGO.transform.SetParent(barGO.transform, false);
-        Text label = labelGO.GetComponent<Text>();
-        label.text = "";
-        label.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        label.fontSize = 14;
-        label.color = Color.white;
-        label.alignment = TextAnchor.MiddleLeft;
-        RectTransform labelRT = labelGO.GetComponent<RectTransform>();
-        labelRT.anchorMin = Vector2.zero;
-        labelRT.anchorMax = Vector2.one;
-        labelRT.offsetMin = new Vector2(6, 0);
-        labelRT.offsetMax = new Vector2(0, 0);
+        GameObject frameGO = new GameObject("Frame", typeof(Image));
+        frameGO.transform.SetParent(barGO.transform, false);
+        frameImage = frameGO.GetComponent<Image>();
+        frameImage.color = Color.white;
+        frameImage.raycastTarget = false;
+        frameRect = frameGO.GetComponent<RectTransform>();
+
+        ConfigureFillImage();
+        ApplyBarSprites();
+        ApplyBarLayout();
+    }
+
+    private void ResolveBarRects()
+    {
+        if (fillImage != null && barRect == null)
+            barRect = fillImage.transform.parent as RectTransform;
+
+        if (frameImage != null && frameRect == null)
+            frameRect = frameImage.rectTransform;
+    }
+
+    private void ApplyBarLayout()
+    {
+        ResolveBarRects();
+
+        if (barRect != null)
+        {
+            Vector2 clampedAnchor = new Vector2(Mathf.Clamp01(barAnchor.x), Mathf.Clamp01(barAnchor.y));
+            barRect.anchorMin = clampedAnchor;
+            barRect.anchorMax = clampedAnchor;
+            barRect.pivot = new Vector2(0.5f, 0.5f);
+            barRect.anchoredPosition = barPosition;
+            barRect.sizeDelta = new Vector2(Mathf.Max(1f, barSize.x), Mathf.Max(1f, barSize.y));
+        }
+
+        if (frameRect != null)
+        {
+            frameRect.anchorMin = Vector2.zero;
+            frameRect.anchorMax = Vector2.one;
+            frameRect.pivot = new Vector2(0.5f, 0.5f);
+            frameRect.anchoredPosition = framePositionOffset;
+            frameRect.sizeDelta = frameSizeExtra;
+        }
+    }
+
+    private void ConfigureFillImage()
+    {
+        if (fillImage == null)
+            return;
+
+        fillImage.raycastTarget = false;
+        fillImage.type = Image.Type.Filled;
+        fillImage.fillMethod = Image.FillMethod.Horizontal;
+        fillImage.fillOrigin = (int)Image.OriginHorizontal.Left;
+        fillImage.fillClockwise = true;
+        fillImage.preserveAspect = false;
+    }
+
+    private void ApplyBarSprites()
+    {
+        if (backgroundImage != null)
+        {
+            backgroundImage.sprite = barBackgroundSprite;
+            backgroundImage.color = barBackgroundSprite != null ? Color.white : new Color(0f, 0f, 0f, 0.6f);
+        }
+
+        if (fillImage != null)
+            fillImage.sprite = barFillSprite;
+
+        if (frameImage != null)
+        {
+            frameImage.sprite = barFrameSprite;
+            frameImage.enabled = barFrameSprite != null;
+        }
     }
 
     private void CreateScreenFlash()
@@ -149,11 +233,13 @@ public class ExposureUI : MonoBehaviour
         float targetFill = 1f - ratio;
         smoothFill = Mathf.Lerp(smoothFill, targetFill, Time.deltaTime * 10f);
 
-        if (fillRect != null && fillImage != null)
+        if (fillImage != null)
         {
-            fillRect.anchorMax = new Vector2(smoothFill, fillRect.anchorMax.y);
+            fillImage.fillAmount = smoothFill;
 
-            if (ratio < 0.5f)
+            if (!tintFillByExposure)
+                fillImage.color = Color.white;
+            else if (ratio < 0.5f)
                 fillImage.color = Color.Lerp(safeColor, warningColor, ratio * 2f);
             else
                 fillImage.color = Color.Lerp(warningColor, dangerColor, (ratio - 0.5f) * 2f);

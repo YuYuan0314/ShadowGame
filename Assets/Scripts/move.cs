@@ -43,13 +43,35 @@ public class move : MonoBehaviour, IShadowMover
     [Tooltip("When the player leaves this moving object's shadow, reset to this object's shadow instead.")]
     public GameObject fallbackSource;
 
+    [Header("Shadow Map")]
+    public ShadowManager shadowManager;
+    public bool registerAsShadowCaster = true;
+
     private int currentIndex;
     private int direction = 1;
     private bool isMoving;
     private float waitTimer;
+    private bool registeredByThisScript;
+
+    private void OnEnable()
+    {
+        RegisterWithShadowManager();
+    }
+
+    private void OnDisable()
+    {
+        if (Application.isPlaying && registeredByThisScript && shadowManager != null)
+        {
+            shadowManager.castShadowObjs.Remove(gameObject);
+            shadowManager.RefreshRendererLists();
+            registeredByThisScript = false;
+        }
+    }
 
     private void Start()
     {
+        RegisterWithShadowManager();
+
         if (moveToFirstNodeOnStart && nodes.Count > 0 && nodes[0].point != null)
         {
             transform.position = nodes[0].point.position;
@@ -138,6 +160,28 @@ public class move : MonoBehaviour, IShadowMover
     public GameObject GetFallbackTarget()
     {
         return fallbackSource;
+    }
+
+    private void RegisterWithShadowManager()
+    {
+        if (!Application.isPlaying || !registerAsShadowCaster)
+        {
+            return;
+        }
+
+        if (shadowManager == null)
+        {
+            shadowManager = FindObjectOfType<ShadowManager>();
+        }
+
+        if (shadowManager == null || shadowManager.castShadowObjs.Contains(gameObject))
+        {
+            return;
+        }
+
+        shadowManager.castShadowObjs.Add(gameObject);
+        shadowManager.RefreshRendererLists();
+        registeredByThisScript = true;
     }
 
     private int GetNextIndex()

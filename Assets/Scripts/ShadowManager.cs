@@ -20,9 +20,18 @@ public class ShadowManager : MonoBehaviour
     [Range(0f, 1f)] public float shadowRatioThreshold = 0.5f;
     public float depthBias = 0.0015f;
     public float readbackInterval = 0.05f;
+    [Min(0f)] public float movingCasterReadbackInterval = 0.016f;
+    [Range(0f, 1f)] public float sourceSwitchAdvantage = 0.1f;
+    [Min(1)] public int minimumSourcePixels = 3;
     public bool useCastShadowObjectsOnly = true;
     public bool autoCollectRenderers = true;
     public bool debugLogRatio;
+
+    [Header("Shadow Edge Accuracy")]
+    [Min(32)] public int movingCasterMinShadowResolution = 512;
+    [Range(0, 3)] public int edgeSampleRadiusPixels = 1;
+    [Range(0f, 1f)] public float edgeCoverageThreshold = 0.5f;
+    [Range(0f, 1f)] public float nearEdgeCoverageThreshold = 0.05f;
 
     [Header("Renderer Lists")]
     public List<Renderer> playerRenderers = new List<Renderer>();
@@ -33,20 +42,42 @@ public class ShadowManager : MonoBehaviour
     public bool HasDepthResult { get; private set; }
     public RenderTexture PlayerDepthTexture { get { return rtPlayer; } }
     public RenderTexture EnvironmentDepthTexture { get { return rtEnv; } }
+    public RenderTexture ShadowSourceIdTexture { get { return rtSourceId; } }
 
     private RenderTexture rtPlayer;
     private RenderTexture rtEnv;
+    private RenderTexture rtSourceId;
     private Material depthWriteMat;
+    private Material sourceIdWriteMat;
     private CommandBuffer cmdPlayer;
     private CommandBuffer cmdEnv;
+    private CommandBuffer cmdSourceId;
     private Matrix4x4 lightView;
     private Matrix4x4 lightProj;
     private Matrix4x4 lightViewProj;
+    private Matrix4x4 latestReadbackViewProj;
+    private bool hasLatestReadbackViewProj;
     private float[] latestEnvDepth;
+    private float[] latestSourceIds;
+    private GameObject[] latestSourceLookup;
     private bool readbackPending;
     private float nextReadbackTime;
     private int currentShadowRes;
     private GameObject currentShadowSource;
+    private bool hasMovingShadowCaster;
+
+    private sealed class ShadowReadbackBatch
+    {
+        public float[] playerDepth;
+        public float[] environmentDepth;
+        public float[] sourceIds;
+        public GameObject[] sourceLookup;
+        public Matrix4x4 viewProj;
+        public int completedRequests;
+        public bool playerFailed;
+        public bool environmentFailed;
+        public bool sourceFailed;
+    }
 
     private struct NPlane
     {
@@ -154,6 +185,8 @@ public class ShadowManager : MonoBehaviour
                 envRenderers.Add(renderer);
             }
         }
+
+        RefreshMovingCasterState();
     }
 
     public GameObject GetProjectedShadowSource(Vector3 worldPoint)
@@ -167,7 +200,18 @@ public class ShadowManager : MonoBehaviour
             return null;
         }
 
-        GameObject source = FindShadowSourceByRay(worldPoint);
+        if (HasDepthResult)
+        {
+            return IsPlayerInShadow ? currentShadowSource : null;
+        }
+
+        GameObject source;
+        if (TrySampleShadowSource(worldPoint, out source))
+        {
+            return source;
+        }
+
+        source = FindShadowSourceByRay(worldPoint);
         if (source == null)
         {
             source = FindShadowSourceByProjectedBounds(worldPoint);
@@ -203,11 +247,10 @@ public class ShadowManager : MonoBehaviour
 
     public bool IsInProjectedArea(Vector3 worldPoint)
     {
-        float pointDepth;
-        float envDepth;
-        if (TrySampleEnvironmentDepth(worldPoint, out pointDepth, out envDepth))
+        float coverage;
+        if (TryGetShadowCoverage(worldPoint, edgeSampleRadiusPixels, out coverage))
         {
-            return pointDepth > envDepth + depthBias;
+            return coverage >= edgeCoverageThreshold;
         }
 
         return FindShadowSourceByRay(worldPoint) != null || FindShadowSourceByProjectedBounds(worldPoint) != null;
@@ -215,9 +258,14 @@ public class ShadowManager : MonoBehaviour
 
     public bool IsNearProjectedArea(Vector3 worldPoint, float tolerance)
     {
-        if (IsInProjectedArea(worldPoint))
+        int tolerancePixels = Mathf.CeilToInt(
+            Mathf.Max(0f, tolerance) * currentShadowRes / Mathf.Max(orthoSize * 2f, 0.01f));
+        int sampleRadius = Mathf.Max(0, edgeSampleRadiusPixels + tolerancePixels);
+
+        float coverage;
+        if (TryGetShadowCoverage(worldPoint, sampleRadius, out coverage))
         {
-            return true;
+            return coverage >= nearEdgeCoverageThreshold;
         }
 
         Vector3 right = GetLightRight();
@@ -271,65 +319,121 @@ public class ShadowManager : MonoBehaviour
 
     public void RenderAndReadbackDepthMaps()
     {
-        if (dirLight == null || player == null || depthWriteMat == null || rtPlayer == null || rtEnv == null)
+        if (dirLight == null || player == null || depthWriteMat == null || sourceIdWriteMat == null
+            || rtPlayer == null || rtEnv == null || rtSourceId == null)
         {
             return;
         }
 
         UpdateLightMatrices();
+        Matrix4x4 readbackViewProj = lightViewProj;
         RenderDepthMap(cmdPlayer, rtPlayer, playerRenderers);
         RenderDepthMap(cmdEnv, rtEnv, envRenderers);
+        GameObject[] sourceLookup = RenderShadowSourceIdMap();
+
+        ShadowReadbackBatch batch = new ShadowReadbackBatch();
+        batch.sourceLookup = sourceLookup;
+        batch.viewProj = readbackViewProj;
 
         readbackPending = true;
-        nextReadbackTime = Time.unscaledTime + Mathf.Max(0f, readbackInterval);
+        nextReadbackTime = Time.unscaledTime + GetEffectiveReadbackInterval();
 
-        AsyncGPUReadback.Request(rtPlayer, 0, TextureFormat.RFloat, OnPlayerDepthReadback);
-    }
-
-    private void OnPlayerDepthReadback(AsyncGPUReadbackRequest reqPlayer)
-    {
-        if (this == null)
+        AsyncGPUReadback.Request(rtPlayer, 0, TextureFormat.RFloat, delegate(AsyncGPUReadbackRequest reqPlayer)
         {
-            return;
-        }
+            if (this == null)
+            {
+                return;
+            }
 
-        if (reqPlayer.hasError)
-        {
-            readbackPending = false;
-            Debug.LogWarning("Player depth RT readback error", this);
-            return;
-        }
+            batch.playerFailed = reqPlayer.hasError;
+            if (!batch.playerFailed)
+            {
+                batch.playerDepth = reqPlayer.GetData<float>().ToArray();
+            }
+            CompleteReadbackRequest(batch);
+        });
 
-        float[] playerDepth = reqPlayer.GetData<float>().ToArray();
         AsyncGPUReadback.Request(rtEnv, 0, TextureFormat.RFloat, delegate(AsyncGPUReadbackRequest reqEnv)
         {
-            OnEnvironmentDepthReadback(reqEnv, playerDepth);
+            if (this == null)
+            {
+                return;
+            }
+
+            batch.environmentFailed = reqEnv.hasError;
+            if (!batch.environmentFailed)
+            {
+                batch.environmentDepth = reqEnv.GetData<float>().ToArray();
+            }
+            CompleteReadbackRequest(batch);
+        });
+
+        AsyncGPUReadback.Request(rtSourceId, 0, TextureFormat.RFloat, delegate(AsyncGPUReadbackRequest reqSourceId)
+        {
+            if (this == null)
+            {
+                return;
+            }
+
+            batch.sourceFailed = reqSourceId.hasError;
+            if (!batch.sourceFailed)
+            {
+                batch.sourceIds = reqSourceId.GetData<float>().ToArray();
+            }
+            CompleteReadbackRequest(batch);
         });
     }
 
-    private void OnEnvironmentDepthReadback(AsyncGPUReadbackRequest reqEnv, float[] playerDepth)
+    private void CompleteReadbackRequest(ShadowReadbackBatch batch)
     {
-        if (this == null)
+        batch.completedRequests++;
+        if (batch.completedRequests < 3)
         {
             return;
         }
 
         readbackPending = false;
-        if (reqEnv.hasError)
+
+        if (batch.playerFailed || batch.playerDepth == null)
+        {
+            Debug.LogWarning("Player depth RT readback error", this);
+            return;
+        }
+
+        if (batch.environmentFailed || batch.environmentDepth == null)
         {
             Debug.LogWarning("Environment depth RT readback error", this);
             return;
         }
 
-        latestEnvDepth = reqEnv.GetData<float>().ToArray();
-        EvaluateShadowRatio(playerDepth, latestEnvDepth);
+        latestEnvDepth = batch.environmentDepth;
+        latestReadbackViewProj = batch.viewProj;
+        hasLatestReadbackViewProj = true;
+
+        if (batch.sourceFailed || batch.sourceIds == null)
+        {
+            Debug.LogWarning("Shadow source ID RT readback error", this);
+            latestSourceIds = null;
+            latestSourceLookup = null;
+            EvaluateShadowRatio(batch.playerDepth, batch.environmentDepth, null, null);
+            return;
+        }
+
+        latestSourceIds = batch.sourceIds;
+        latestSourceLookup = batch.sourceLookup;
+        EvaluateShadowRatio(batch.playerDepth, batch.environmentDepth, latestSourceIds, latestSourceLookup);
     }
 
-    private void EvaluateShadowRatio(float[] playerDepth, float[] envDepth)
+    private void EvaluateShadowRatio(
+        float[] playerDepth,
+        float[] envDepth,
+        float[] sourceIds,
+        GameObject[] sourceLookup)
     {
         int totalPlayerPixels = 0;
         int shadowedPixels = 0;
         int count = Mathf.Min(playerDepth.Length, envDepth.Length);
+        Dictionary<int, int> sourcePixelCounts = new Dictionary<int, int>();
 
         for (int i = 0; i < count; i++)
         {
@@ -343,6 +447,17 @@ public class ShadowManager : MonoBehaviour
             if (pDepth > envDepth[i] + depthBias)
             {
                 shadowedPixels++;
+
+                if (sourceIds != null && i < sourceIds.Length)
+                {
+                    int sourceId = Mathf.RoundToInt(sourceIds[i]);
+                    if (sourceId > 0 && sourceLookup != null && sourceId < sourceLookup.Length && sourceLookup[sourceId] != null)
+                    {
+                        int pixelCount;
+                        sourcePixelCounts.TryGetValue(sourceId, out pixelCount);
+                        sourcePixelCounts[sourceId] = pixelCount + 1;
+                    }
+                }
             }
         }
 
@@ -358,18 +473,47 @@ public class ShadowManager : MonoBehaviour
         IsPlayerInShadow = CurrentShadowRatio >= shadowRatioThreshold;
         HasDepthResult = totalPlayerPixels > 0;
 
-        if (IsPlayerInShadow && player != null)
+        if (IsPlayerInShadow)
         {
-            GameObject source = FindShadowSourceByRay(player.position + Vector3.up * 0.05f);
-            if (source == null)
+            int bestSourceId = 0;
+            int bestPixelCount = 0;
+            foreach (KeyValuePair<int, int> pair in sourcePixelCounts)
             {
-                source = FindShadowSourceByProjectedBounds(player.position + Vector3.up * 0.05f);
+                if (pair.Value > bestPixelCount)
+                {
+                    bestSourceId = pair.Key;
+                    bestPixelCount = pair.Value;
+                }
             }
 
-            if (source != null)
+            GameObject bestSource = bestSourceId > 0 && sourceLookup != null && bestSourceId < sourceLookup.Length
+                ? sourceLookup[bestSourceId]
+                : null;
+
+            if (bestSource != null && bestPixelCount >= Mathf.Max(1, minimumSourcePixels))
             {
-                currentShadowSource = source;
+                if (currentShadowSource == null || currentShadowSource == bestSource)
+                {
+                    currentShadowSource = bestSource;
+                }
+                else
+                {
+                    int currentSourcePixels = GetSourcePixelCount(currentShadowSource, sourcePixelCounts, sourceLookup);
+                    int requiredAdvantage = Mathf.CeilToInt(shadowedPixels * sourceSwitchAdvantage);
+                    if (bestPixelCount >= currentSourcePixels + requiredAdvantage)
+                    {
+                        currentShadowSource = bestSource;
+                    }
+                }
             }
+            else if (sourceIds != null)
+            {
+                currentShadowSource = null;
+            }
+        }
+        else
+        {
+            currentShadowSource = null;
         }
 
         if (debugLogRatio)
@@ -378,15 +522,82 @@ public class ShadowManager : MonoBehaviour
         }
     }
 
+    private int GetSourcePixelCount(
+        GameObject source,
+        Dictionary<int, int> sourcePixelCounts,
+        GameObject[] sourceLookup)
+    {
+        if (source == null || sourceLookup == null)
+        {
+            return 0;
+        }
+
+        for (int sourceId = 1; sourceId < sourceLookup.Length; sourceId++)
+        {
+            if (sourceLookup[sourceId] != source)
+            {
+                continue;
+            }
+
+            int pixelCount;
+            return sourcePixelCounts.TryGetValue(sourceId, out pixelCount) ? pixelCount : 0;
+        }
+
+        return 0;
+    }
+
+    private float GetEffectiveReadbackInterval()
+    {
+        float interval = Mathf.Max(0f, readbackInterval);
+        if (hasMovingShadowCaster)
+        {
+            interval = Mathf.Min(interval, Mathf.Max(0f, movingCasterReadbackInterval));
+        }
+        return interval;
+    }
+
+    private void RefreshMovingCasterState()
+    {
+        hasMovingShadowCaster = false;
+
+        if (castShadowObjs != null)
+        {
+            for (int i = 0; i < castShadowObjs.Count; i++)
+            {
+                GameObject caster = castShadowObjs[i];
+                if (caster != null && caster.GetComponentInChildren<IShadowMover>() != null)
+                {
+                    hasMovingShadowCaster = true;
+                    return;
+                }
+            }
+        }
+
+        for (int i = 0; i < envRenderers.Count; i++)
+        {
+            Renderer renderer = envRenderers[i];
+            if (renderer != null && renderer.GetComponentInParent<IShadowMover>() != null)
+            {
+                hasMovingShadowCaster = true;
+                return;
+            }
+        }
+    }
+
     private void EnsureResources()
     {
-        if (currentShadowRes != shadowRes || rtPlayer == null || rtEnv == null)
+        int requiredShadowRes = GetRequiredShadowResolution();
+        if (currentShadowRes != requiredShadowRes || rtPlayer == null || rtEnv == null || rtSourceId == null)
         {
             ReleaseRenderTextures();
-            currentShadowRes = Mathf.Max(32, shadowRes);
+            currentShadowRes = requiredShadowRes;
             rtPlayer = CreateDepthTexture("PlayerDepthRT");
             rtEnv = CreateDepthTexture("EnvironmentDepthRT");
+            rtSourceId = CreateDepthTexture("ShadowSourceIdRT");
             latestEnvDepth = null;
+            latestSourceIds = null;
+            latestSourceLookup = null;
+            hasLatestReadbackViewProj = false;
             HasDepthResult = false;
         }
 
@@ -404,6 +615,20 @@ public class ShadowManager : MonoBehaviour
             }
         }
 
+        if (sourceIdWriteMat == null)
+        {
+            Shader sourceIdShader = Shader.Find("Hidden/WriteShadowSourceId");
+            if (sourceIdShader != null)
+            {
+                sourceIdWriteMat = new Material(sourceIdShader);
+                sourceIdWriteMat.hideFlags = HideFlags.HideAndDontSave;
+            }
+            else
+            {
+                Debug.LogError("Shader Hidden/WriteShadowSourceId not found. Create Assets/Shaders/WriteShadowSourceId.shader.", this);
+            }
+        }
+
         if (cmdPlayer == null)
         {
             cmdPlayer = new CommandBuffer();
@@ -413,6 +638,11 @@ public class ShadowManager : MonoBehaviour
         {
             cmdEnv = new CommandBuffer();
             cmdEnv.name = "EnvironmentDepth";
+        }
+        if (cmdSourceId == null)
+        {
+            cmdSourceId = new CommandBuffer();
+            cmdSourceId.name = "ShadowSourceId";
         }
     }
 
@@ -444,6 +674,12 @@ public class ShadowManager : MonoBehaviour
             cmdEnv = null;
         }
 
+        if (cmdSourceId != null)
+        {
+            cmdSourceId.Release();
+            cmdSourceId = null;
+        }
+
         if (depthWriteMat != null)
         {
             if (Application.isPlaying)
@@ -455,6 +691,19 @@ public class ShadowManager : MonoBehaviour
                 DestroyImmediate(depthWriteMat);
             }
             depthWriteMat = null;
+        }
+
+        if (sourceIdWriteMat != null)
+        {
+            if (Application.isPlaying)
+            {
+                Destroy(sourceIdWriteMat);
+            }
+            else
+            {
+                DestroyImmediate(sourceIdWriteMat);
+            }
+            sourceIdWriteMat = null;
         }
     }
 
@@ -486,6 +735,20 @@ public class ShadowManager : MonoBehaviour
                 DestroyImmediate(rtEnv);
             }
             rtEnv = null;
+        }
+
+        if (rtSourceId != null)
+        {
+            rtSourceId.Release();
+            if (Application.isPlaying)
+            {
+                Destroy(rtSourceId);
+            }
+            else
+            {
+                DestroyImmediate(rtSourceId);
+            }
+            rtSourceId = null;
         }
     }
 
@@ -521,17 +784,157 @@ public class ShadowManager : MonoBehaviour
         Graphics.ExecuteCommandBuffer(cmd);
     }
 
+    private GameObject[] RenderShadowSourceIdMap()
+    {
+        List<GameObject> sourceLookup = new List<GameObject>();
+        Dictionary<GameObject, int> sourceIds = new Dictionary<GameObject, int>();
+        sourceLookup.Add(null);
+
+        cmdSourceId.Clear();
+        cmdSourceId.SetRenderTarget(rtSourceId);
+        cmdSourceId.ClearRenderTarget(true, true, Color.clear);
+        cmdSourceId.SetViewProjectionMatrices(lightView, lightProj);
+
+        for (int i = 0; i < envRenderers.Count; i++)
+        {
+            Renderer renderer = envRenderers[i];
+            if (!IsDrawableDepthRenderer(renderer))
+            {
+                continue;
+            }
+
+            GameObject source = GetShadowSourceForRenderer(renderer);
+            if (source == null)
+            {
+                continue;
+            }
+
+            int sourceId;
+            if (!sourceIds.TryGetValue(source, out sourceId))
+            {
+                sourceId = sourceLookup.Count;
+                sourceIds.Add(source, sourceId);
+                sourceLookup.Add(source);
+            }
+
+            cmdSourceId.SetGlobalFloat("_ShadowSourceId", sourceId);
+            cmdSourceId.DrawRenderer(renderer, sourceIdWriteMat);
+        }
+
+        Graphics.ExecuteCommandBuffer(cmdSourceId);
+        return sourceLookup.ToArray();
+    }
+
+    private GameObject GetShadowSourceForRenderer(Renderer renderer)
+    {
+        if (renderer == null)
+        {
+            return null;
+        }
+
+        if (castShadowObjs != null)
+        {
+            for (int i = 0; i < castShadowObjs.Count; i++)
+            {
+                GameObject candidate = castShadowObjs[i];
+                if (candidate != null && (renderer.gameObject == candidate || renderer.transform.IsChildOf(candidate.transform)))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        MonoBehaviour[] parents = renderer.GetComponentsInParent<MonoBehaviour>(true);
+        for (int i = 0; i < parents.Length; i++)
+        {
+            if (parents[i] is IShadowMover)
+            {
+                return parents[i].gameObject;
+            }
+        }
+
+        return renderer.gameObject;
+    }
+
+    private bool TryGetShadowCoverage(Vector3 worldPoint, int sampleRadiusPixels, out float coverage)
+    {
+        coverage = 0f;
+        if (latestEnvDepth == null || latestEnvDepth.Length == 0 || currentShadowRes <= 0 || !hasLatestReadbackViewProj)
+        {
+            return false;
+        }
+
+        Vector4 clip = latestReadbackViewProj * new Vector4(worldPoint.x, worldPoint.y, worldPoint.z, 1f);
+        if (Mathf.Abs(clip.w) < 0.0001f)
+        {
+            return false;
+        }
+
+        Vector3 ndc = new Vector3(clip.x / clip.w, clip.y / clip.w, clip.z / clip.w);
+        float u = ndc.x * 0.5f + 0.5f;
+        float v = ndc.y * 0.5f + 0.5f;
+        float pointDepth = ndc.z;
+        if (u < 0f || u > 1f || v < 0f || v > 1f || pointDepth < 0f || pointDepth > 1f)
+        {
+            return false;
+        }
+
+        int centerX = Mathf.Clamp(Mathf.RoundToInt(u * (currentShadowRes - 1)), 0, currentShadowRes - 1);
+        int centerY = Mathf.Clamp(Mathf.RoundToInt(v * (currentShadowRes - 1)), 0, currentShadowRes - 1);
+        int radius = Mathf.Max(0, sampleRadiusPixels);
+        int validSamples = 0;
+        int shadowSamples = 0;
+
+        for (int yOffset = -radius; yOffset <= radius; yOffset++)
+        {
+            int y = centerY + yOffset;
+            if (y < 0 || y >= currentShadowRes)
+            {
+                continue;
+            }
+
+            for (int xOffset = -radius; xOffset <= radius; xOffset++)
+            {
+                int x = centerX + xOffset;
+                if (x < 0 || x >= currentShadowRes)
+                {
+                    continue;
+                }
+
+                int index = y * currentShadowRes + x;
+                if (index < 0 || index >= latestEnvDepth.Length)
+                {
+                    continue;
+                }
+
+                validSamples++;
+                if (pointDepth > latestEnvDepth[index] + depthBias)
+                {
+                    shadowSamples++;
+                }
+            }
+        }
+
+        if (validSamples == 0)
+        {
+            return false;
+        }
+
+        coverage = shadowSamples / (float)validSamples;
+        return true;
+    }
+
     private bool TrySampleEnvironmentDepth(Vector3 worldPoint, out float pointDepth, out float envDepth)
     {
         pointDepth = 1f;
         envDepth = 1f;
 
-        if (latestEnvDepth == null || latestEnvDepth.Length == 0 || currentShadowRes <= 0)
+        if (latestEnvDepth == null || latestEnvDepth.Length == 0 || currentShadowRes <= 0 || !hasLatestReadbackViewProj)
         {
             return false;
         }
 
-        Vector4 clip = lightViewProj * new Vector4(worldPoint.x, worldPoint.y, worldPoint.z, 1f);
+        Vector4 clip = latestReadbackViewProj * new Vector4(worldPoint.x, worldPoint.y, worldPoint.z, 1f);
         if (Mathf.Abs(clip.w) < 0.0001f)
         {
             return false;
@@ -556,7 +959,47 @@ public class ShadowManager : MonoBehaviour
         }
 
         envDepth = latestEnvDepth[index];
-        return envDepth < 0.9999f;
+        return true;
+    }
+
+    private bool TrySampleShadowSource(Vector3 worldPoint, out GameObject source)
+    {
+        source = null;
+        if (latestSourceIds == null || latestSourceLookup == null || currentShadowRes <= 0 || !hasLatestReadbackViewProj)
+        {
+            return false;
+        }
+
+        Vector4 clip = latestReadbackViewProj * new Vector4(worldPoint.x, worldPoint.y, worldPoint.z, 1f);
+        if (Mathf.Abs(clip.w) < 0.0001f)
+        {
+            return false;
+        }
+
+        Vector3 ndc = new Vector3(clip.x / clip.w, clip.y / clip.w, clip.z / clip.w);
+        float u = ndc.x * 0.5f + 0.5f;
+        float v = ndc.y * 0.5f + 0.5f;
+        if (u < 0f || u > 1f || v < 0f || v > 1f)
+        {
+            return false;
+        }
+
+        int x = Mathf.Clamp(Mathf.FloorToInt(u * currentShadowRes), 0, currentShadowRes - 1);
+        int y = Mathf.Clamp(Mathf.FloorToInt(v * currentShadowRes), 0, currentShadowRes - 1);
+        int index = y * currentShadowRes + x;
+        if (index < 0 || index >= latestSourceIds.Length)
+        {
+            return false;
+        }
+
+        int sourceId = Mathf.RoundToInt(latestSourceIds[index]);
+        if (sourceId <= 0 || sourceId >= latestSourceLookup.Length)
+        {
+            return false;
+        }
+
+        source = latestSourceLookup[sourceId];
+        return source != null;
     }
 
     private GameObject FindShadowSourceByRay(Vector3 worldPoint)
@@ -683,6 +1126,16 @@ public class ShadowManager : MonoBehaviour
                 }
             }
         }
+    }
+
+    private int GetRequiredShadowResolution()
+    {
+        int resolution = Mathf.Max(32, shadowRes);
+        if (hasMovingShadowCaster)
+        {
+            resolution = Mathf.Max(resolution, movingCasterMinShadowResolution);
+        }
+        return resolution;
     }
 
     private bool IsDrawableDepthRenderer(Renderer renderer)
